@@ -12,7 +12,7 @@ namespace Paster.Core
         [DataMember(Name="captureShortcut")] public string CaptureShortcut = "Ctrl+Alt+C";
         [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Alt+V";
         [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Alt+X";
-        [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 250;
+        [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 0;
         [DataMember(Name="characterDelayMilliseconds")] public int CharacterDelayMilliseconds = 8;
         [DataMember(Name="clipboardTimeoutMilliseconds")] public int ClipboardTimeoutMilliseconds = 2000;
         [DataMember(Name="maximumTextCharacters")] public int MaximumTextCharacters = 1024 * 1024;
@@ -21,7 +21,7 @@ namespace Paster.Core
         {
             Shortcut.Parse(CaptureShortcut); Shortcut.Parse(PasteShortcut); Shortcut.Parse(CancelShortcut);
             if (StartDelayMilliseconds < 0 || StartDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("StartDelayMilliseconds");
-            if (CharacterDelayMilliseconds < 0 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds");
+            if (CharacterDelayMilliseconds < 8 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds", "Character delay must be between 8 and 60000 milliseconds to prevent dropped input.");
             if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds");
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > 16 * 1024 * 1024) throw new ArgumentOutOfRangeException("MaximumTextCharacters");
         }
@@ -29,7 +29,7 @@ namespace Paster.Core
         public static PasterConfig Load(string path)
         {
             if (!File.Exists(path)) return new PasterConfig();
-            try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); c.Validate(); return c; } }
+            try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); if (c.StartDelayMilliseconds == 250) c.StartDelayMilliseconds = 0; c.Validate(); return c; } }
             catch { return new PasterConfig(); }
         }
 

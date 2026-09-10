@@ -48,8 +48,8 @@ Defaults:
 * Capture: `Ctrl+Alt+C`
 * Paste/type: `Ctrl+Alt+V`
 * Cancel: `Ctrl+Alt+X`
-* Start delay: 250 ms
-* Inter-character delay: 8 ms
+* Start delay: 0 ms
+* Inter-character delay: 8 ms minimum
 * Clipboard timeout: 2 seconds
 * Maximum captured text: 1 MiB of UTF-16 text
 
