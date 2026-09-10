@@ -1,0 +1,5 @@
+dist/
+artifacts/
+*.user
+*.suo
+__pycache__/
