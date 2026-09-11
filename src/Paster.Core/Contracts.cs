@@ -16,6 +16,6 @@ namespace Paster.Core
     public interface IClock { void Sleep(int milliseconds, CancellationToken token); }
     public sealed class TransferStatus
     {
-        public string LastError; public bool HasCapture; public bool IsTransferring; public IntPtr TargetWindow;
+        public string LastError; public bool HasCapture; public bool IsTransferring; public bool IsInputAvailable; public IntPtr TargetWindow;
     }
 }

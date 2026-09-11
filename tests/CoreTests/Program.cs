@@ -9,7 +9,7 @@ namespace Paster.CoreTests
     {
         public IntPtr ForegroundWindow = new IntPtr(1); public bool CopyWorks = true; public string Clipboard; public bool InputWorks = true; public bool ChangeAfterFirst; public uint Sequence; public List<string> Units = new List<string>();
         IntPtr ITextCapturePlatform.ForegroundWindow { get { return (ChangeAfterFirst && Units.Count > 0) ? new IntPtr(2) : ForegroundWindow; } }
-        public bool IsInputAvailable { get { return true; } }
+        public bool IsInputAvailable { get { return InputWorks; } }
         public uint ClipboardSequence { get { return Sequence; } }
         public bool SendCopyShortcut() { if (CopyWorks) Sequence++; return CopyWorks; }
         public bool TryReadClipboard(out string text) { text = Clipboard; return text != null; }
@@ -27,6 +27,9 @@ namespace Paster.CoreTests
             Test("capture failure clears stale text", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="old"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"first"); p.CopyWorks=false; Assert(!c.Capture(),"failure"); Assert(!c.Status.HasCapture,"stale capture"); });
             Test("size limit", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="12345"; PasterConfig cfg=new PasterConfig(); cfg.MaximumTextCharacters=3; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),cfg); Assert(!c.Capture(),"limit"); });
             Test("unsafe character delay rejected", delegate { PasterConfig cfg=new PasterConfig(); cfg.CharacterDelayMilliseconds=1; bool rejected=false; try { cfg.Validate(); } catch(ArgumentOutOfRangeException) { rejected=true; } Assert(rejected,"unsafe delay"); });
+            Test("shortcut parser rejects multiple keys and duplicate modifiers", delegate { bool multiple=false, duplicate=false; try { Shortcut.Parse("Ctrl+C+V"); } catch(FormatException) { multiple=true; } try { Shortcut.Parse("Ctrl+Ctrl+C"); } catch(FormatException) { duplicate=true; } Assert(multiple && duplicate,"ambiguous shortcut accepted"); });
+            Test("conflicting configured shortcuts rejected", delegate { PasterConfig cfg=new PasterConfig(); cfg.PasteShortcut=cfg.CaptureShortcut; bool rejected=false; try { cfg.Validate(); } catch(FormatException) { rejected=true; } Assert(rejected,"conflicting shortcuts accepted"); });
+            Test("input availability is enforced", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; p.InputWorks=false; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(!c.Transfer(),"unavailable input transferred"); Assert(!c.Status.IsInputAvailable,"availability status"); });
             Test("clipboard fallback transfer", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="copied normally"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Transfer(),"transfer"); Assert(String.Join("",p.Units.ToArray())==p.Clipboard,"clipboard fallback"); });
             Test("focus change and cancellation", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"capture"); p.ChangeAfterFirst=true; Assert(!c.Transfer(),"focus stop"); p.ChangeAfterFirst=false; Assert(c.Capture(),"recapture"); c.Cancel(); Assert(!c.Status.IsTransferring,"cancel state"); });
             Test("overlap prevention", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"capture"); Assert(c.Transfer(),"transfer"); Assert(!c.Status.IsTransferring,"finished"); });

@@ -45,13 +45,13 @@ available; it has no tray icon, taskbar entry, or normal window.
 
 Defaults:
 
-* Capture: `Ctrl+C/Ctrl+Alt+C`
+* Capture activation: `Ctrl+Alt+C` (then Paster sends `Ctrl+C` to the target)
 * Paste/type: `Ctrl+Shift+V`
 * Cancel: `Ctrl+Alt+X`
 * Start delay: 0 ms
 * Inter-character delay: 8 ms minimum
 * Clipboard timeout: 2 seconds
-* Maximum captured text: 1 MiB of UTF-16 text
+* Maximum captured text: 1,048,576 UTF-16 characters
 
 The management interface is explicitly invoked from PowerShell or a shortcut:
 
