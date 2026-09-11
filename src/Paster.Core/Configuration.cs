@@ -10,7 +10,7 @@ namespace Paster.Core
     public sealed class PasterConfig
     {
         [DataMember(Name="captureShortcut")] public string CaptureShortcut = "Ctrl+Alt+C";
-        [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Alt+V";
+        [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Shift+V";
         [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Alt+X";
         [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 0;
         [DataMember(Name="characterDelayMilliseconds")] public int CharacterDelayMilliseconds = 8;
