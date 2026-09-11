@@ -46,7 +46,7 @@ available; it has no tray icon, taskbar entry, or normal window.
 Defaults:
 
 * Capture: `Ctrl+C/Ctrl+Alt+C`
-* Paste/type: `Ctrl+Alt+V`
+* Paste/type: `Ctrl+Shift+V`
 * Cancel: `Ctrl+Alt+X`
 * Start delay: 0 ms
 * Inter-character delay: 8 ms minimum
