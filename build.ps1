@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $compiler)) { throw 'The Windows C# compiler (c
 
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$output = Join-Path $dist 'Paster.exe'
+$output = Join-Path $dist 'paster.exe'
 $runningDistInstances = @(Get-Process -Name 'Paster' -ErrorAction SilentlyContinue | Where-Object {
     try { [String]::Equals([IO.Path]::GetFullPath($_.Path), [IO.Path]::GetFullPath($output), [StringComparison]::OrdinalIgnoreCase) }
     catch { $false }

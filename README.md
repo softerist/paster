@@ -25,7 +25,7 @@ clipboard text. Capture and transfer operations cannot overlap.
 The destination is the local foreground window at the moment transfer starts.
 Paster stops the transfer when any of the following occurs:
 
-- The cancel shortcut (`Ctrl+Alt+X` by default) is pressed.
+- The cancel shortcut (`Ctrl+Shift+X` by default) is pressed.
 - A physical keyboard key or mouse button is pressed.
 - The local foreground window changes.
 - Windows rejects simulated input.
@@ -91,7 +91,7 @@ executable, and starts that newly built version.
 
 - Capture shortcut: `Ctrl+Shift+C`
 - Paste/type shortcut: `Ctrl+Shift+V`
-- Cancel shortcut: `Ctrl+Alt+X`
+- Cancel shortcut: `Ctrl+Shift+X`
 - Start delay: 0 ms
 - Inter-character delay: 8 ms
 - Clipboard timeout: 2,000 ms

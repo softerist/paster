@@ -11,7 +11,7 @@ namespace Paster.Core
     {
         [DataMember(Name="captureShortcut")] public string CaptureShortcut = "Ctrl+Shift+C";
         [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Shift+V";
-        [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Alt+X";
+        [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Shift+X";
         [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 0;
         [DataMember(Name="characterDelayMilliseconds")] public int CharacterDelayMilliseconds = 8;
         [DataMember(Name="clipboardTimeoutMilliseconds")] public int ClipboardTimeoutMilliseconds = 2000;
