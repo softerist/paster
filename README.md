@@ -8,7 +8,7 @@ the direction you need.
 ## Core workflow
 
 1. Select text in the source application and press the capture shortcut
-   (`Ctrl+C` by default).
+   (`Ctrl+Shift+C` by default).
 2. Paster waits for the activation keys to be released, sends `Ctrl+C`, and
    accepts only fresh Unicode text from the clipboard.
 3. Focus the destination application or Remote Desktop window and press the
@@ -89,7 +89,7 @@ executable, and starts that newly built version.
 
 ## Default configuration
 
-- Capture shortcut: `Ctrl+C`
+- Capture shortcut: `Ctrl+Shift+C`
 - Paste/type shortcut: `Ctrl+Shift+V`
 - Cancel shortcut: `Ctrl+Alt+X`
 - Start delay: 0 ms
