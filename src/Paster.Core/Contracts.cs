@@ -12,6 +12,7 @@ namespace Paster.Core
         bool TryReadClipboard(out string text);
         bool SendTextUnit(string textUnit);
         bool IsInputAvailable { get; }
+        bool IsUserInterruptionRequested { get; }
     }
     public interface IClock { void Sleep(int milliseconds, CancellationToken token); }
     public sealed class TransferStatus

@@ -10,10 +10,10 @@ namespace Paster.Windows
 {
     internal sealed class ManagementPipe : IDisposable
     {
-        private readonly PasterApplicationContext context; private readonly Thread thread; private volatile bool stop;
+        private readonly PasterApplicationContext context; private readonly Thread thread; private readonly object pipeGate=new object(); private volatile bool stop; private NamedPipeServerStream activePipe;
         public ManagementPipe(PasterApplicationContext c) { context=c; thread=new Thread(Listen); thread.IsBackground=true; thread.Start(); }
-        private void Listen() { while(!stop) { try { using(NamedPipeServerStream p=new NamedPipeServerStream("Paster.Management",PipeDirection.In,1,PipeTransmissionMode.Byte,PipeOptions.None)) { p.WaitForConnection(); using(StreamReader r=new StreamReader(p)) { string command=r.ReadLine(); if(!String.IsNullOrEmpty(command)) context.DispatchCommand(command); } } } catch { if(!stop) Thread.Sleep(100); } } }
-        public void Dispose() { stop=true; try { using(NamedPipeClientStream p=new NamedPipeClientStream(".","Paster.Management",PipeDirection.Out)) { p.Connect(50); } } catch { } }
+        private void Listen() { while(!stop) { try { using(NamedPipeServerStream p=new NamedPipeServerStream("Paster.Management",PipeDirection.In,1,PipeTransmissionMode.Byte,PipeOptions.None)) { lock(pipeGate) { if(stop) return; activePipe=p; } try { p.WaitForConnection(); using(StreamReader r=new StreamReader(p)) { string command=r.ReadLine(); if(!String.IsNullOrEmpty(command)) context.DispatchCommand(command); } } finally { lock(pipeGate) { if(Object.ReferenceEquals(activePipe,p)) activePipe=null; } } } } catch { if(!stop) Thread.Sleep(100); } } }
+        public void Dispose() { stop=true; lock(pipeGate) { if(activePipe!=null) { try { activePipe.Dispose(); } catch { } activePipe=null; } } if (thread != Thread.CurrentThread) thread.Join(); }
     }
     internal static class Management
     {

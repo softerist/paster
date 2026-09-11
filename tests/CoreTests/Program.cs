@@ -7,15 +7,16 @@ namespace Paster.CoreTests
 {
     internal sealed class FakePlatform : ITextCapturePlatform
     {
-        public IntPtr ForegroundWindow = new IntPtr(1); public bool CopyWorks = true; public string Clipboard; public bool InputWorks = true; public bool ChangeAfterFirst; public uint Sequence; public List<string> Units = new List<string>();
+        public IntPtr ForegroundWindow = new IntPtr(1); public bool CopyWorks = true; public string Clipboard; public bool InputWorks = true; public bool ChangeAfterFirst; public bool UserInterruption; public uint Sequence; public List<string> Units = new List<string>();
         IntPtr ITextCapturePlatform.ForegroundWindow { get { return (ChangeAfterFirst && Units.Count > 0) ? new IntPtr(2) : ForegroundWindow; } }
         public bool IsInputAvailable { get { return InputWorks; } }
         public uint ClipboardSequence { get { return Sequence; } }
         public bool SendCopyShortcut() { if (CopyWorks) Sequence++; return CopyWorks; }
         public bool TryReadClipboard(out string text) { text = Clipboard; return text != null; }
         public bool SendTextUnit(string textUnit) { if (!InputWorks) return false; Units.Add(textUnit); return true; }
+        public bool IsUserInterruptionRequested { get { return UserInterruption; } }
     }
-    internal sealed class FakeClock : IClock { public void Sleep(int milliseconds, CancellationToken token) { token.ThrowIfCancellationRequested(); } }
+    internal sealed class FakeClock : IClock { public Action<int> OnSleep; private bool fired; public void Sleep(int milliseconds, CancellationToken token) { token.ThrowIfCancellationRequested(); if(!fired && OnSleep!=null) { fired=true; OnSleep(milliseconds); } token.ThrowIfCancellationRequested(); } }
     internal static class Program
     {
         private static int passed;
@@ -28,11 +29,14 @@ namespace Paster.CoreTests
             Test("size limit", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="12345"; PasterConfig cfg=new PasterConfig(); cfg.MaximumTextCharacters=3; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),cfg); Assert(!c.Capture(),"limit"); });
             Test("unsafe character delay rejected", delegate { PasterConfig cfg=new PasterConfig(); cfg.CharacterDelayMilliseconds=1; bool rejected=false; try { cfg.Validate(); } catch(ArgumentOutOfRangeException) { rejected=true; } Assert(rejected,"unsafe delay"); });
             Test("shortcut parser rejects multiple keys and duplicate modifiers", delegate { bool multiple=false, duplicate=false; try { Shortcut.Parse("Ctrl+C+V"); } catch(FormatException) { multiple=true; } try { Shortcut.Parse("Ctrl+Ctrl+C"); } catch(FormatException) { duplicate=true; } Assert(multiple && duplicate,"ambiguous shortcut accepted"); });
+            Test("shortcut parser rejects unsupported virtual keys", delegate { bool unicode=false, punctuation=false; try { Shortcut.Parse("Ctrl+é"); } catch(FormatException) { unicode=true; } try { Shortcut.Parse("Ctrl+!"); } catch(FormatException) { punctuation=true; } Assert(unicode && punctuation,"unsupported shortcut accepted"); });
             Test("conflicting configured shortcuts rejected", delegate { PasterConfig cfg=new PasterConfig(); cfg.PasteShortcut=cfg.CaptureShortcut; bool rejected=false; try { cfg.Validate(); } catch(FormatException) { rejected=true; } Assert(rejected,"conflicting shortcuts accepted"); });
             Test("input availability is enforced", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; p.InputWorks=false; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(!c.Transfer(),"unavailable input transferred"); Assert(!c.Status.IsInputAvailable,"availability status"); });
             Test("clipboard fallback transfer", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="copied normally"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Transfer(),"transfer"); Assert(String.Join("",p.Units.ToArray())==p.Clipboard,"clipboard fallback"); });
             Test("focus change and cancellation", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"capture"); p.ChangeAfterFirst=true; Assert(!c.Transfer(),"focus stop"); p.ChangeAfterFirst=false; Assert(c.Capture(),"recapture"); c.Cancel(); Assert(!c.Status.IsTransferring,"cancel state"); });
             Test("overlap prevention", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"capture"); Assert(c.Transfer(),"transfer"); Assert(!c.Status.IsTransferring,"finished"); });
+            Test("user interruption stops transfer and preserves capture", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"capture"); p.UserInterruption=true; Assert(!c.Transfer(),"interruption ignored"); Assert(!c.Status.IsTransferring,"transfer still active"); Assert(c.Status.HasCapture,"valid capture discarded"); });
+            Test("capture is rejected during transfer", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abc"; FakeClock clock=new FakeClock(); TransferCoordinator c=new TransferCoordinator(p,clock,new PasterConfig()); Assert(c.Capture(),"capture"); bool overlappingCapture=true; clock.OnSleep=delegate(int ignored) { overlappingCapture=c.Capture(); }; Assert(c.Transfer(),"transfer"); Assert(!overlappingCapture,"overlapping capture accepted"); Assert(c.Status.HasCapture,"capture lost after overlap rejection"); });
             Console.WriteLine("{0} tests passed", passed); return 0;
         }
     }

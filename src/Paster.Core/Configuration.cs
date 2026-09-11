@@ -9,7 +9,7 @@ namespace Paster.Core
     [DataContract]
     public sealed class PasterConfig
     {
-        [DataMember(Name="captureShortcut")] public string CaptureShortcut = "Ctrl+Alt+C";
+        [DataMember(Name="captureShortcut")] public string CaptureShortcut = "Ctrl+C";
         [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Shift+V";
         [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Alt+X";
         [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 0;
@@ -55,7 +55,7 @@ namespace Paster.Core
             if (String.IsNullOrWhiteSpace(value)) throw new FormatException("Shortcut is empty.");
             uint mods = 0; uint key = 0; bool hasKey = false;
             string[] parts = value.Split('+');
-            for (int i = 0; i < parts.Length; i++) { string p = parts[i].Trim(); uint modifier = 0; if (p.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || p.Equals("Control", StringComparison.OrdinalIgnoreCase)) modifier = 2; else if (p.Equals("Alt", StringComparison.OrdinalIgnoreCase)) modifier = 1; else if (p.Equals("Shift", StringComparison.OrdinalIgnoreCase)) modifier = 4; else if (p.Equals("Win", StringComparison.OrdinalIgnoreCase) || p.Equals("Windows", StringComparison.OrdinalIgnoreCase)) modifier = 8; if (modifier != 0) { if ((mods & modifier) != 0) throw new FormatException("Shortcut contains a duplicate modifier."); mods |= modifier; continue; } uint parsedKey = 0; bool parsed = false; if (p.Length == 1) { parsedKey = Char.ToUpperInvariant(p[0]); parsed = true; } else if (p.StartsWith("F", StringComparison.OrdinalIgnoreCase) && p.Length <= 3) { int n; if (Int32.TryParse(p.Substring(1), out n) && n >= 1 && n <= 24) { parsedKey = (uint)(0x70 + n - 1); parsed = true; } } else if (p.Equals("Escape", StringComparison.OrdinalIgnoreCase)) { parsedKey = 0x1B; parsed = true; } if (!parsed) throw new FormatException("Unknown shortcut key."); if (hasKey) throw new FormatException("A shortcut can contain only one key."); key = parsedKey; hasKey = true; }
+            for (int i = 0; i < parts.Length; i++) { string p = parts[i].Trim(); uint modifier = 0; if (p.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || p.Equals("Control", StringComparison.OrdinalIgnoreCase)) modifier = 2; else if (p.Equals("Alt", StringComparison.OrdinalIgnoreCase)) modifier = 1; else if (p.Equals("Shift", StringComparison.OrdinalIgnoreCase)) modifier = 4; else if (p.Equals("Win", StringComparison.OrdinalIgnoreCase) || p.Equals("Windows", StringComparison.OrdinalIgnoreCase)) modifier = 8; if (modifier != 0) { if ((mods & modifier) != 0) throw new FormatException("Shortcut contains a duplicate modifier."); mods |= modifier; continue; } uint parsedKey = 0; bool parsed = false; if (p.Length == 1 && (Char.IsLetterOrDigit(p[0]) && p[0] <= 0x7F)) { parsedKey = Char.ToUpperInvariant(p[0]); parsed = true; } else if (p.StartsWith("F", StringComparison.OrdinalIgnoreCase) && p.Length <= 3) { int n; if (Int32.TryParse(p.Substring(1), out n) && n >= 1 && n <= 24) { parsedKey = (uint)(0x70 + n - 1); parsed = true; } } else if (p.Equals("Escape", StringComparison.OrdinalIgnoreCase)) { parsedKey = 0x1B; parsed = true; } if (!parsed) throw new FormatException("Unknown or unsupported shortcut key."); if (hasKey) throw new FormatException("A shortcut can contain only one key."); key = parsedKey; hasKey = true; }
             if (!hasKey || mods == 0) throw new FormatException("A shortcut needs modifiers and one key."); return new Shortcut(mods, key);
         }
     }
