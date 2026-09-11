@@ -69,7 +69,7 @@ required.
 .\build.ps1 -RunTests
 ```
 
-This creates `dist\Paster.exe` as a GUI-subsystem executable and runs the
+This creates `dist\paster.exe` as a GUI-subsystem executable and runs the
 dependency-free core test harness.
 
 ## Install
@@ -111,12 +111,12 @@ after changing shortcuts so the global hotkeys can be re-registered.
 Run the installed executable with one of these explicit commands:
 
 ```powershell
-& "$env:LOCALAPPDATA\Paster\Paster.exe" --settings
-& "$env:LOCALAPPDATA\Paster\Paster.exe" --status
-& "$env:LOCALAPPDATA\Paster\Paster.exe" --clear
-& "$env:LOCALAPPDATA\Paster\Paster.exe" --exit
-& "$env:LOCALAPPDATA\Paster\Paster.exe" --enable-autostart
-& "$env:LOCALAPPDATA\Paster\Paster.exe" --disable-autostart
+& "$env:LOCALAPPDATA\Paster\paster.exe" --settings
+& "$env:LOCALAPPDATA\Paster\paster.exe" --status
+& "$env:LOCALAPPDATA\Paster\paster.exe" --clear
+& "$env:LOCALAPPDATA\Paster\paster.exe" --exit
+& "$env:LOCALAPPDATA\Paster\paster.exe" --enable-autostart
+& "$env:LOCALAPPDATA\Paster\paster.exe" --disable-autostart
 ```
 
 `--status` reports whether a capture exists, whether transfer is active,

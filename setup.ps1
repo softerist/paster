@@ -4,10 +4,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$binary = Join-Path $root 'dist\Paster.exe'
+$binary = Join-Path $root 'dist\paster.exe'
 & (Join-Path $root 'build.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
-$installedBinary = Join-Path $InstallRoot 'Paster.exe'
+$installedBinary = Join-Path $InstallRoot 'paster.exe'
 $running = @(Get-Process -Name 'Paster' -ErrorAction SilentlyContinue)
 if ($running.Count -gt 0) {
     & $binary --exit
