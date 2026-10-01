@@ -32,19 +32,54 @@ namespace Paster.Windows
         // Characters that would need Shift, Ctrl, or Alt are sent as Unicode instead, so typing never presses a modifier: rapid Shift taps
         // trigger the Sticky Keys prompt (also on RDP hosts), and synthesized modifiers can combine with keys into application shortcuts.
         // Home and Delete are extended keys: without the flag and scan code, RDP clients map them to numpad 7 and "." when NumLock is on.
-        public bool SendText(string text, CodeModeKeys codeMode) { if (text.Length == 0) return true; List<TypedKey> keys=CodeTyping.Expand(text,codeMode); bool unicode=config.TypeShiftedAsUnicode; INPUT[] inputs=new INPUT[keys.Count*(unicode?2:8)]; int count=0; for (int i=0; i<keys.Count; i++) { switch (keys[i].Action) { case KeyAction.Enter: AddKeyPair(inputs,ref count,0x0D,0x1C,0); break; case KeyAction.Tab: AddKeyPair(inputs,ref count,0x09,0x0F,0); break; case KeyAction.Escape: AddKeyPair(inputs,ref count,0x1B,0x01,0); break; case KeyAction.Home: AddKeyPair(inputs,ref count,0x24,0x47,KEYEVENTF_EXTENDEDKEY); break; case KeyAction.Delete: AddKeyPair(inputs,ref count,0x2E,0x53,KEYEVENTF_EXTENDEDKEY); break; default: char ch=keys[i].Character; short mapped=VkKeyScan(ch); if (mapped != -1 && (mapped & 0xff00) == 0) AddKeyPair(inputs,ref count,(ushort)mapped,0,0); else if (mapped != -1 && !unicode && (mapped & 0xf800) == 0 && ch >= ' ' && ch != '\u007f') AddMappedKey(inputs,ref count,mapped); else AddKeyPair(inputs,ref count,0,ch,KEYEVENTF_UNICODE); break; } } try { SendBatch(inputs,count,"keyboard input"); } catch { if (!unicode) { SendKey(0x10,true); SendKey(0x11,true); SendKey(0x12,true); } throw; } return true; }
+        // A successful batch marks input as available again, so one rejection (UAC prompt, lock screen) never blocks later transfers. When
+        // Windows inserts only part of a batch, the keys it left pressed are released and the exception reports exactly how many characters
+        // reached the target, so Resume neither skips nor repeats any.
+        public bool SendText(string text, int start, int length, CodeModeKeys codeMode)
+        {
+            if (length == 0) return true;
+            List<TypedKey> keys=CodeTyping.Expand(text,start,length,codeMode); bool allUnicode=config.TypeAllAsUnicode, shiftedUnicode=allUnicode || config.TypeShiftedAsUnicode;
+            INPUT[] inputs=new INPUT[keys.Count*(shiftedUnicode?2:8)]; int[] characterDown=new int[length]; int count=0;
+            for (int i=0; i<keys.Count; i++)
+            {
+                TypedKey key=keys[i];
+                switch (key.Action)
+                {
+                    case KeyAction.Enter: characterDown[key.Index]=count; AddKeyPair(inputs,ref count,0x0D,0x1C,0); break;
+                    case KeyAction.Tab: characterDown[key.Index]=count; AddKeyPair(inputs,ref count,0x09,0x0F,0); break;
+                    case KeyAction.Escape: AddKeyPair(inputs,ref count,0x1B,0x01,0); break;
+                    case KeyAction.Home: AddKeyPair(inputs,ref count,0x24,0x47,KEYEVENTF_EXTENDEDKEY); break;
+                    case KeyAction.Delete: AddKeyPair(inputs,ref count,0x2E,0x53,KEYEVENTF_EXTENDEDKEY); break;
+                    case KeyAction.Backspace: AddKeyPair(inputs,ref count,0x08,0x0E,0); break;
+                    default:
+                        char ch=key.Character; short mapped=allUnicode ? (short)-1 : VkKeyScan(ch);
+                        // Code mode's dismissal space shares its line break's index; only the line break itself counts as the character's key.
+                        bool own=key.Character==text[start+key.Index];
+                        if (mapped != -1 && (mapped & 0xff00) == 0) { if (own) characterDown[key.Index]=count; AddKeyPair(inputs,ref count,(ushort)mapped,0,0); }
+                        else if (mapped != -1 && !shiftedUnicode && (mapped & 0xf800) == 0 && ch >= ' ' && ch != '\u007f') { int down=AddMappedKey(inputs,ref count,mapped); if (own) characterDown[key.Index]=down; }
+                        else { if (own) characterDown[key.Index]=count; AddKeyPair(inputs,ref count,0,ch,KEYEVENTF_UNICODE); }
+                        break;
+                }
+            }
+            int inserted=(int)SendInputBatch((uint)count,inputs,Marshal.SizeOf(typeof(INPUT)));
+            if (inserted==count) { inputAvailable=true; return true; }
+            Win32Exception error=InputError("keyboard input");
+            if (inserted>0 && (inputs[inserted-1].ki.dwFlags & KEYEVENTF_KEYUP)==0) { INPUT up=inputs[inserted-1]; up.ki.dwFlags|=KEYEVENTF_KEYUP; SendInput(1,ref up,Marshal.SizeOf(typeof(INPUT))); }
+            if (!shiftedUnicode) { SendKey(0x10,true); SendKey(0x11,true); SendKey(0x12,true); }
+            inputAvailable=false; int sent=0; while (sent<length && characterDown[sent]<inserted) sent++;
+            throw new InputRejectedException(error.Message,sent);
+        }
         // Shift/Ctrl/Alt chords for characters the layout maps to modified keys; used only when typeShiftedAsUnicode is off (rapid Shift taps
         // can trigger the Sticky Keys prompt and synthesized modifiers can combine into application shortcuts).
-        private static void AddMappedKey(INPUT[] inputs, ref int count, short mapped) { ushort key=(ushort)(mapped & 0xff); int held=(mapped >> 8) & 0x07; ushort[] modifiers={0x10,0x11,0x12}; for (int b=0; b<3; b++) if ((held & (1<<b))!=0) inputs[count++]=CreateInput(modifiers[b],0,0); AddKeyPair(inputs,ref count,key,0,0); for (int b=2; b>=0; b--) if ((held & (1<<b))!=0) inputs[count++]=CreateInput(modifiers[b],0,KEYEVENTF_KEYUP); }
+        private static int AddMappedKey(INPUT[] inputs, ref int count, short mapped) { ushort key=(ushort)(mapped & 0xff); int held=(mapped >> 8) & 0x07; ushort[] modifiers={0x10,0x11,0x12}; for (int b=0; b<3; b++) if ((held & (1<<b))!=0) inputs[count++]=CreateInput(modifiers[b],0,0); int down=count; AddKeyPair(inputs,ref count,key,0,0); for (int b=2; b>=0; b--) if ((held & (1<<b))!=0) inputs[count++]=CreateInput(modifiers[b],0,KEYEVENTF_KEYUP); return down; }
         private static void AddKeyPair(INPUT[] inputs, ref int count, ushort key, ushort scan, uint flags) { inputs[count++]=CreateInput(key,scan,flags); inputs[count++]=CreateInput(key,scan,flags|KEYEVENTF_KEYUP); }
         // Windows 11 ignores timer-resolution requests from processes without visible windows unless they opt out of power throttling.
         private static void DisablePowerThrottling() { PROCESS_POWER_THROTTLING_STATE state=new PROCESS_POWER_THROTTLING_STATE(); state.Version=1; state.ControlMask=0x1|0x4; state.StateMask=0; try { SetProcessInformation(GetCurrentProcess(),4,ref state,Marshal.SizeOf(typeof(PROCESS_POWER_THROTTLING_STATE))); } catch (EntryPointNotFoundException) { } }
         // The default ~15.6 ms timer tick would stretch every batch delay; request 1 ms only while a transfer runs.
         public static void SetHighResolutionTimer(bool enabled) { if (enabled) timeBeginPeriod(1); else timeEndPeriod(1); }
         private static INPUT CreateInput(ushort key, ushort scan, uint flags) { INPUT input=new INPUT(); input.type=1; input.ki.wVk=key; input.ki.wScan=scan; input.ki.dwFlags=flags; return input; }
-        private void SendBatch(INPUT[] inputs, int count, string kind) { if (SendInputBatch((uint)count,inputs,Marshal.SizeOf(typeof(INPUT))) != (uint)count) { inputAvailable=false; throw InputError(kind); } }
         private static Win32Exception InputError(string kind) { int code=Marshal.GetLastWin32Error(); return new Win32Exception(code, "Windows rejected "+kind+" (error "+code+")"); }
-        private bool SendKey(ushort key, bool release) { INPUT i=new INPUT(); i.type=1; i.ki.wVk=key; i.ki.dwFlags=release ? KEYEVENTF_KEYUP : 0; bool sent=SendInput(1,ref i,Marshal.SizeOf(typeof(INPUT))) == 1; if(!sent) inputAvailable=false; return sent; }
+        private bool SendKey(ushort key, bool release) { INPUT i=new INPUT(); i.type=1; i.ki.wVk=key; i.ki.dwFlags=release ? KEYEVENTF_KEYUP : 0; bool sent=SendInput(1,ref i,Marshal.SizeOf(typeof(INPUT))) == 1; inputAvailable=sent; return sent; }
         private bool ReleaseModifiers() { WaitWhile(ModifiersDown,5000); return !ModifiersDown(); }
         private static void WaitWhile(Func<bool> condition, int timeoutMilliseconds) { Stopwatch elapsed=Stopwatch.StartNew(); while (elapsed.ElapsedMilliseconds < timeoutMilliseconds && condition()) Thread.Sleep(5); }
         private static bool ModifiersDown() { return (GetAsyncKeyState(0x11)&0x8000)!=0 || (GetAsyncKeyState(0x12)&0x8000)!=0 || (GetAsyncKeyState(0x10)&0x8000)!=0 || (GetAsyncKeyState(0x5B)&0x8000)!=0 || (GetAsyncKeyState(0x5C)&0x8000)!=0; }

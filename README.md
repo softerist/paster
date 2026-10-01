@@ -44,7 +44,8 @@ cannot overlap.
 Text is sent in small batches, each as one atomic `SendInput` call:
 
 - Characters that need no modifier on the active keyboard layout (lowercase
-  letters, digits, space) are sent as virtual keys; Tab and line breaks are
+  letters, digits, space) are sent as virtual keys, unless "Type all characters
+  as Unicode" (`typeAllAsUnicode`) is on; Tab and line breaks are
   sent as the Tab and Enter keys, and CRLF line endings become a single Enter
   press.
 - Everything else (uppercase letters, shifted symbols, AltGr and non-layout
@@ -86,8 +87,10 @@ inside the session itself is typed rather than pasted.
 
 Use `Ctrl+Shift+V` to type regardless.
 
-Listed applications are also typed at the remote speed (500 characters per
-second by default). Remote clients accept keystrokes far faster than they can
+Listed applications are also typed at the remote speed (1,000 keystrokes per
+second by default; a browser-based Windows Cloud session measured about 630
+delivered keystrokes per second at this setting and stopped immediately when
+interrupted). Remote clients accept keystrokes far faster than they can
 deliver them, and keystrokes already queued in the client or the remote session
 cannot be cancelled; pacing keeps that queue small so interruption stays
 immediate. If text keeps appearing after you interrupt a transfer, lower the
@@ -95,12 +98,15 @@ remote speed; if interruption is immediate, you can raise it.
 
 To find the fastest speed your session keeps up with:
 
-1. Copy a long text locally (about 20,000 characters).
-2. Paste it into a remote editor, and click once while it is typing.
-3. If typing stops immediately, raise the remote speed in the settings dialog
-   (for example 500, 1,000, 2,000) and repeat. If text keeps appearing after
-   the click, the session is slower than the setting: go back to the last
-   speed that stopped immediately.
+1. Create a test text with numbered lines and copy it, for example:
+   `1..400 | ForEach-Object { 'Line {0:D4} abcdefghijklmnopqrstuvwxyz0123456789' -f $_ } | Set-Clipboard`
+   (about 20,000 characters, below the confirmation threshold).
+2. Press `Ctrl+V` in an empty remote editor and click once after a few seconds.
+3. Note the last line that appears. If typing stopped within a line or two of
+   the click, raise the remote speed in the settings dialog (for example 1,000,
+   2,000) and repeat. If many more lines keep appearing after the click,
+   the session is slower than the setting: go back to the last speed that
+   stopped immediately.
 
 Limitations:
 
@@ -127,13 +133,18 @@ which application is focused inside a remote session, so for `Ctrl+V` into a
 remote window it can type in code mode (on by default; each key can be turned
 on or off in the settings dialog):
 
+- **Space, then Backspace** before each Enter and Tab (on by default, skipped
+  after whitespace) ends the current word, so suggestion popups such as
+  Notepad++ word completion or VS Code IntelliSense close instead of Enter or
+  Tab accepting a suggestion and swallowing the line break. The space is
+  removed again, so terminals, documents, and spreadsheet cells are unchanged.
 - **Home** after each Enter (on by default) moves before any auto-inserted
   indentation, so the line's own indentation is typed exactly. The editor's
   indentation ends up at the end of the line; most editors remove or replace it
   on the next Enter, but the last line can keep trailing whitespace. It never
   removes existing text, so it is safe in terminals, documents, and chats.
-- **Escape** before each Enter and Tab (off by default) closes suggestion
-  popups so Enter or Tab cannot accept them. It also clears the current line in
+- **Escape** before each Enter and Tab (off by default) also closes suggestion
+  popups, including inline (ghost text) suggestions. It also clears the current line in
   PowerShell and cmd, cancels spreadsheet cell edits, and can close dialogs, so
   turn it on only if you paste mainly into code editors.
 - **Delete** after each `(`, `[`, `{`, `"`, `'`, and `` ` `` (off by default)
@@ -252,6 +263,7 @@ when you save there.
 | `characterDelayMilliseconds` | Delay per batch (ms) | `2` | 0-60,000 |
 | `charactersPerBatch` | Characters per batch | `32` | 1-4,096 |
 | `typeShiftedAsUnicode` | Type uppercase and symbols as Unicode | `true` | `false`: type them with Shift (can trigger Sticky Keys) |
+| `typeAllAsUnicode` | Type all characters as Unicode (any keyboard layout) | `false` | `true`: letters and digits are layout-independent too |
 | `stopOnUserInput` | Stop typing on key press or click | `true` | `false`: only the cancel shortcut and focus changes stop typing |
 | `clipboardTimeoutMilliseconds` | Clipboard timeout (ms) | `2000` | 100-120,000 |
 | `maximumTextCharacters` | Maximum characters | `16777216` | 1-268,435,456 |
@@ -261,10 +273,11 @@ when you save there.
 | `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
 | `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
 | `codeModeForRemotePaste` | Use code mode for Ctrl+V into remote windows | `true` | `false`: plain typing |
+| `codeModeDismissSuggestions` | Code mode: Space+Backspace before Enter and Tab | `true` | Closes suggestion popups without removing text |
 | `codeModeEscapeBeforeEnter` | Code mode: Escape before Enter and Tab | `false` | Clears terminal lines and cancels spreadsheet cell edits |
 | `codeModeHomeAfterEnter` | Code mode: Home after Enter | `true` | |
 | `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `false` | Only safe when typing at the end of a document into an editor that auto-closes |
-| `remoteCharactersPerSecond` | Remote speed (keys/s) | `500` | Keystrokes per second; 0 (unlimited)-100,000 |
+| `remoteCharactersPerSecond` | Remote speed (keys/s) | `1000` | Keystrokes per second; 0 (unlimited)-100,000 |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
@@ -293,7 +306,8 @@ Run the installed executable with one of these explicit commands:
 ```
 
 `--status` reports whether a capture exists, whether transfer is active,
-whether Windows input remains available, the current target-window handle, the
+whether Windows accepted the last simulated input, the current target-window
+handle, the
 resume point of an interrupted transfer, and the latest error. `--clear`
 removes the in-memory capture and resume point.
 
@@ -312,6 +326,13 @@ directory. It does not remove unrelated user files.
 - Windows 10/11 interactive user sessions are the supported environment.
 - Unicode `SendInput` handling depends on the destination application; a few
   older console programs and games ignore Unicode input.
+- Lowercase letters, digits, and unshifted punctuation are sent as keys of the
+  local keyboard layout. If a remote session uses a different layout (for
+  example US locally and German remotely), turn on "Type all characters as
+  Unicode" so every character arrives exactly.
+- If Windows rejects simulated input (a UAC prompt or the lock screen during a
+  transfer), that transfer stops and keeps its resume point; the next paste
+  tries again.
 - Clipboard ownership and Windows permission policy can prevent capture or
   simulated input.
 - Local foreground monitoring cannot detect focus changes inside a remote

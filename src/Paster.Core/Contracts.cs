@@ -11,7 +11,7 @@ namespace Paster.Core
         uint ClipboardSequence { get; }
         bool SendCopyShortcut();
         bool TryReadClipboard(out string text);
-        bool SendText(string text, CodeModeKeys codeMode);
+        bool SendText(string text, int start, int length, CodeModeKeys codeMode);
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
         bool IsRemoteWindow(IntPtr window);
@@ -24,13 +24,19 @@ namespace Paster.Core
         public string LastError; public bool HasCapture; public bool IsTransferring; public bool IsInputAvailable; public IntPtr TargetWindow; public int ResumeOffset; public int ResumeTotal;
     }
     public enum TransferChoice { Cancel, Start, Resume }
-    public enum KeyAction { Character, Enter, Tab, Escape, Home, Delete }
-    public struct TypedKey { public KeyAction Action; public char Character; public TypedKey(KeyAction action, char character) { Action = action; Character = character; } }
+    public enum KeyAction { Character, Enter, Tab, Escape, Home, Delete, Backspace }
+    // Index is the position (relative to the expanded range) of the character that produced the key (helper keys share their character's index).
+    public struct TypedKey { public KeyAction Action; public char Character; public int Index; public TypedKey(KeyAction action, char character, int index) { Action = action; Character = character; Index = index; } }
+    // Thrown by SendText when Windows inserted only part of a batch; CharactersSent counts the leading characters whose key reached the target.
+    public sealed class InputRejectedException : Exception { public readonly int CharactersSent; public InputRejectedException(string message, int charactersSent) : base(message) { CharactersSent = charactersSent; } }
     // Code mode counters editor automation without knowing which editor is focused (the remote app is invisible locally):
-    // Escape closes suggestion popups before Enter/Tab can accept them, Home after Enter moves before auto-inserted indentation so the
-    // line's own indentation is typed exactly, and Delete after an opener removes an auto-closed bracket or quote. Delete assumes typing
-    // at the end of a document, where nothing but auto-inserted text follows the cursor.
-    [Flags] public enum CodeModeKeys { None = 0, EscapeBeforeEnter = 1, HomeAfterEnter = 2, DeleteAutoClosed = 4, All = 7 }
+    // - DismissSuggestions types Space then Backspace before Enter/Tab when the previous character is not whitespace: the space ends the word,
+    //   so suggestion popups (Notepad++ word completion, VS Code IntelliSense) close instead of Enter/Tab accepting them, and Backspace removes
+    //   it. It is a no-op in terminals and documents, and it is skipped after whitespace, where Backspace could unindent or clear a cell.
+    // - EscapeBeforeEnter closes popups too, but also clears terminal input lines and cancels spreadsheet cell edits.
+    // - HomeAfterEnter moves before auto-inserted indentation so the line's own indentation is typed exactly.
+    // - DeleteAutoClosed removes an auto-closed bracket or quote; it assumes typing at the end of a document.
+    [Flags] public enum CodeModeKeys { None = 0, EscapeBeforeEnter = 1, HomeAfterEnter = 2, DeleteAutoClosed = 4, DismissSuggestions = 8, All = 15 }
     public static class CodeTyping
     {
         public const string Openers = "([{\"'`";
@@ -38,20 +44,29 @@ namespace Paster.Core
         public static int CountKeys(string text, int start, int length, CodeModeKeys extra)
         {
             int escape = (extra & CodeModeKeys.EscapeBeforeEnter) != 0 ? 1 : 0, home = (extra & CodeModeKeys.HomeAfterEnter) != 0 ? 1 : 0, delete = (extra & CodeModeKeys.DeleteAutoClosed) != 0 ? 1 : 0, keys = length;
+            bool dismiss = (extra & CodeModeKeys.DismissSuggestions) != 0;
             if (extra == CodeModeKeys.None) return keys;
-            for (int i = start; i < start + length; i++) { char ch = text[i]; if (ch == '\n') keys += escape + home; else if (ch == '\t') keys += escape; else if (Openers.IndexOf(ch) >= 0) keys += delete; }
+            for (int i = start; i < start + length; i++) { char ch = text[i]; if (ch == '\n' || ch == '\t') keys += (dismiss && Dismisses(text, i) ? 2 : 0) + escape + (ch == '\n' ? home : 0); else if (Openers.IndexOf(ch) >= 0) keys += delete; }
             return keys;
         }
-        public static List<TypedKey> Expand(string text, CodeModeKeys extra)
+        // The character before position i is in the full text, so batch boundaries see the same context as one long batch.
+        private static bool Dismisses(string text, int i) { return i > 0 && !Char.IsWhiteSpace(text[i - 1]); }
+        public static List<TypedKey> Expand(string text, CodeModeKeys extra) { return Expand(text, 0, text.Length, extra); }
+        public static List<TypedKey> Expand(string text, int start, int length, CodeModeKeys extra)
         {
-            bool escape = (extra & CodeModeKeys.EscapeBeforeEnter) != 0, home = (extra & CodeModeKeys.HomeAfterEnter) != 0, delete = (extra & CodeModeKeys.DeleteAutoClosed) != 0;
-            List<TypedKey> keys = new List<TypedKey>(text.Length * (extra != CodeModeKeys.None ? 2 : 1));
-            for (int i = 0; i < text.Length; i++)
+            bool escape = (extra & CodeModeKeys.EscapeBeforeEnter) != 0, home = (extra & CodeModeKeys.HomeAfterEnter) != 0, delete = (extra & CodeModeKeys.DeleteAutoClosed) != 0, dismiss = (extra & CodeModeKeys.DismissSuggestions) != 0;
+            List<TypedKey> keys = new List<TypedKey>(length * (extra != CodeModeKeys.None ? 2 : 1));
+            for (int i = start; i < start + length; i++)
             {
-                char ch = text[i];
-                if (ch == '\n') { if (escape) keys.Add(new TypedKey(KeyAction.Escape, '\0')); keys.Add(new TypedKey(KeyAction.Enter, '\0')); if (home) keys.Add(new TypedKey(KeyAction.Home, '\0')); }
-                else if (ch == '\t') { if (escape) keys.Add(new TypedKey(KeyAction.Escape, '\0')); keys.Add(new TypedKey(KeyAction.Tab, '\0')); }
-                else { keys.Add(new TypedKey(KeyAction.Character, ch)); if (delete && Openers.IndexOf(ch) >= 0) keys.Add(new TypedKey(KeyAction.Delete, '\0')); }
+                char ch = text[i]; int index = i - start;
+                if (ch == '\n' || ch == '\t')
+                {
+                    if (dismiss && Dismisses(text, i)) { keys.Add(new TypedKey(KeyAction.Character, ' ', index)); keys.Add(new TypedKey(KeyAction.Backspace, '\0', index)); }
+                    if (escape) keys.Add(new TypedKey(KeyAction.Escape, '\0', index));
+                    keys.Add(new TypedKey(ch == '\n' ? KeyAction.Enter : KeyAction.Tab, '\0', index));
+                    if (ch == '\n' && home) keys.Add(new TypedKey(KeyAction.Home, '\0', index));
+                }
+                else { keys.Add(new TypedKey(KeyAction.Character, ch, index)); if (delete && Openers.IndexOf(ch) >= 0) keys.Add(new TypedKey(KeyAction.Delete, '\0', index)); }
             }
             return keys;
         }

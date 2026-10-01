@@ -11,7 +11,7 @@ namespace Paster.Core
     [DataContract]
     public sealed class PasterConfig
     {
-        // Code mode defaults to Home only: it never removes existing text. Escape (clears terminal lines, cancels cell edits) and Delete
+        // Code mode defaults to Home and the Space+Backspace popup dismissal: neither removes existing text. Escape (clears terminal lines, cancels cell edits) and Delete
         // (eats text unless typing at the end of a document) are opt-in.
         // Order groups the settings file by topic; every option has a default, so a hand-edited file may omit any of them.
         [DataMember(Name="captureShortcut", Order=1)] public string CaptureShortcut = "Ctrl+Shift+C";
@@ -22,19 +22,21 @@ namespace Paster.Core
         [DataMember(Name="characterDelayMilliseconds", Order=6)] public int CharacterDelayMilliseconds = 2;
         [DataMember(Name="charactersPerBatch", Order=7)] public int CharactersPerBatch = 32;
         [DataMember(Name="typeShiftedAsUnicode", Order=8)] public bool TypeShiftedAsUnicode = true;
-        [DataMember(Name="stopOnUserInput", Order=9)] public bool StopOnUserInput = true;
-        [DataMember(Name="clipboardTimeoutMilliseconds", Order=10)] public int ClipboardTimeoutMilliseconds = 2000;
-        [DataMember(Name="maximumTextCharacters", Order=11)] public int MaximumTextCharacters = 16 * 1024 * 1024;
-        [DataMember(Name="confirmAboveLines", Order=12)] public int ConfirmAboveLines = 2000;
-        [DataMember(Name="promptTimeoutSeconds", Order=13)] public int PromptTimeoutSeconds = 120;
-        [DataMember(Name="typeOnCtrlV", Order=14)] public bool TypeOnCtrlV = true;
-        [DataMember(Name="typeOnPasteApps", Order=15)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
-        [DataMember(Name="typeRemoteCopies", Order=16)] public bool TypeRemoteCopies = true;
-        [DataMember(Name="codeModeForRemotePaste", Order=17)] public bool CodeModeForRemotePaste = true;
-        [DataMember(Name="codeModeEscapeBeforeEnter", Order=18)] public bool CodeModeEscapeBeforeEnter = false;
-        [DataMember(Name="codeModeHomeAfterEnter", Order=19)] public bool CodeModeHomeAfterEnter = true;
-        [DataMember(Name="codeModeDeleteAutoClosed", Order=20)] public bool CodeModeDeleteAutoClosed = false;
-        [DataMember(Name="remoteCharactersPerSecond", Order=21)] public int RemoteCharactersPerSecond = 500;
+        [DataMember(Name="typeAllAsUnicode", Order=9)] public bool TypeAllAsUnicode = false;
+        [DataMember(Name="stopOnUserInput", Order=10)] public bool StopOnUserInput = true;
+        [DataMember(Name="clipboardTimeoutMilliseconds", Order=11)] public int ClipboardTimeoutMilliseconds = 2000;
+        [DataMember(Name="maximumTextCharacters", Order=12)] public int MaximumTextCharacters = 16 * 1024 * 1024;
+        [DataMember(Name="confirmAboveLines", Order=13)] public int ConfirmAboveLines = 2000;
+        [DataMember(Name="promptTimeoutSeconds", Order=14)] public int PromptTimeoutSeconds = 120;
+        [DataMember(Name="typeOnCtrlV", Order=15)] public bool TypeOnCtrlV = true;
+        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
+        [DataMember(Name="typeRemoteCopies", Order=17)] public bool TypeRemoteCopies = true;
+        [DataMember(Name="codeModeForRemotePaste", Order=18)] public bool CodeModeForRemotePaste = true;
+        [DataMember(Name="codeModeDismissSuggestions", Order=19)] public bool CodeModeDismissSuggestions = true;
+        [DataMember(Name="codeModeEscapeBeforeEnter", Order=20)] public bool CodeModeEscapeBeforeEnter = false;
+        [DataMember(Name="codeModeHomeAfterEnter", Order=21)] public bool CodeModeHomeAfterEnter = true;
+        [DataMember(Name="codeModeDeleteAutoClosed", Order=22)] public bool CodeModeDeleteAutoClosed = false;
+        [DataMember(Name="remoteCharactersPerSecond", Order=23)] public int RemoteCharactersPerSecond = 1000;
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
 
@@ -54,7 +56,7 @@ namespace Paster.Core
         }
 
         // Every field is a value type or string, so a shallow copy is complete and new settings can never be forgotten here.
-        public CodeModeKeys CodeModeKeys { get { return (CodeModeEscapeBeforeEnter ? CodeModeKeys.EscapeBeforeEnter : 0) | (CodeModeHomeAfterEnter ? CodeModeKeys.HomeAfterEnter : 0) | (CodeModeDeleteAutoClosed ? CodeModeKeys.DeleteAutoClosed : 0); } }
+        public CodeModeKeys CodeModeKeys { get { return (CodeModeDismissSuggestions ? CodeModeKeys.DismissSuggestions : 0) | (CodeModeEscapeBeforeEnter ? CodeModeKeys.EscapeBeforeEnter : 0) | (CodeModeHomeAfterEnter ? CodeModeKeys.HomeAfterEnter : 0) | (CodeModeDeleteAutoClosed ? CodeModeKeys.DeleteAutoClosed : 0); } }
         public PasterConfig Clone() { return (PasterConfig)MemberwiseClone(); }
         public void CopyFrom(PasterConfig other) { foreach (FieldInfo field in typeof(PasterConfig).GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(this, field.GetValue(other)); }
 

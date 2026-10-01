@@ -35,7 +35,7 @@ namespace Paster.Core
             {
                 if (captureInProgress) return Fail("A capture is still in progress.", false);
                 if (cancellation != null) return Fail("A transfer is already in progress.", false);
-                if (!platform.IsInputAvailable) return Fail("Windows input is unavailable.", false);
+                // No gate on an earlier input rejection (UAC prompt, lock screen): each transfer tries again, so Paster recovers by itself.
                 // Whichever is newer wins: text copied normally after a capture replaces it, so plain Ctrl+C works as the copy step.
                 text = captured;
                 if (useClipboard || text == null)
@@ -56,7 +56,7 @@ namespace Paster.Core
             try
             {
                 offset = ChooseStart(text, lines, large, target, remote, rate, batchSize, codeMode, token); if (offset < 0) { Fail("Transfer cancelled.", false); return false; } sent = offset;
-                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; if (!platform.SendText(text.Substring(i, length), codeMode)) throw new InvalidOperationException("Windows input rejected a text batch."); keysSent += CodeTyping.CountKeys(text, i, length, codeMode); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, keysSent * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
+                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; try { if (!platform.SendText(text, i, length, codeMode)) throw new InvalidOperationException("Windows input rejected a text batch."); } catch (InputRejectedException rejected) { sent = i + rejected.CharactersSent; if (sent > 0 && sent < text.Length && Char.IsLowSurrogate(text[sent])) sent--; throw; } keysSent += CodeTyping.CountKeys(text, i, length, codeMode); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, keysSent * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
                 lock (gate) { resumeText = null; resumeOffset = 0; } return true;
             }
             catch (OperationCanceledException) { if (large) SaveResumePoint(text, sent); Fail("Transfer cancelled.", false); return false; } catch (Exception ex) { if (large) SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
