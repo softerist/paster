@@ -17,8 +17,45 @@ the direction you need.
    that foreground window in small batches. Tabs and line breaks are emitted as
    keyboard input, and CRLF line endings are normalized to a single Enter press.
 
-If no explicit capture is available, paste falls back to the current Unicode
-clipboard text. Capture and transfer operations cannot overlap.
+Paste types whichever is newer: the explicit capture or Unicode text copied to
+the clipboard after it. If no explicit capture is available, paste uses the
+current clipboard text. Capture and transfer operations cannot overlap.
+
+## Ctrl+V in Remote Desktop
+
+Pressing the normal Windows `Ctrl+V` while a listed application is the
+foreground window types the clipboard text instead of pasting it, as long as
+that text was copied locally. Plain `Ctrl+C` locally and `Ctrl+V` in the Remote
+Desktop window is enough; `Ctrl+V` everywhere else remains an ordinary Windows
+paste.
+
+The default list covers the Remote Desktop clients `mstsc.exe` and `msrdc.exe`
+and the browser-based Windows Cloud client in Edge or Chrome. Entries are
+comma-separated process names; add `:text` to require the window title to
+contain that text (for example `msedge.exe:Windows Cloud`), so other browser
+tabs keep their normal paste. Edit the list in the settings dialog; an empty
+list disables the feature.
+
+`Ctrl+V` in a listed application stays a native paste when:
+
+- the clipboard holds no text (files or images pass through to the session),
+- you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
+  `Ctrl+Insert`, or `Shift+Delete`) since the last local copy, or
+- the clipboard last changed while the remote session was in front, which is
+  how redirected remote copies arrive.
+
+Copy locally again to switch back to typing, or use `Ctrl+Shift+V` to type
+regardless. Pressing a paste shortcut while text is being typed stops the
+transfer.
+
+Limitations: Paster cannot tell whether a native paste succeeded, so the choice
+is made by destination application and clipboard origin, not by trying a paste
+first. A copy made inside the remote session with the mouse (context menu) is
+not detected; use `Ctrl+C` there or copy locally. Copying from the remote
+session to the local machine is not possible when clipboard redirection is
+blocked, because the copied text stays on the remote clipboard. A full-screen
+Remote Desktop session that forwards Windows key combinations to the remote
+computer may receive `Ctrl+V` before Paster can intercept it.
 
 ## Transfer safety and interruption
 

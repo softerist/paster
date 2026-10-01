@@ -17,6 +17,7 @@ namespace Paster.Core
         [DataMember(Name="charactersPerBatch")] public int CharactersPerBatch = 32;
         [DataMember(Name="clipboardTimeoutMilliseconds")] public int ClipboardTimeoutMilliseconds = 2000;
         [DataMember(Name="maximumTextCharacters")] public int MaximumTextCharacters = 1024 * 1024;
+        [DataMember(Name="typeOnPasteApps")] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
 
         public void Validate()
         {
@@ -30,8 +31,25 @@ namespace Paster.Core
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > 16 * 1024 * 1024) throw new ArgumentOutOfRangeException("MaximumTextCharacters");
         }
 
-        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, CharactersPerBatch = CharactersPerBatch, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters }; }
-        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; CharactersPerBatch = other.CharactersPerBatch; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; }
+        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, CharactersPerBatch = CharactersPerBatch, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters, TypeOnPasteApps = TypeOnPasteApps }; }
+        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; CharactersPerBatch = other.CharactersPerBatch; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; TypeOnPasteApps = other.TypeOnPasteApps; }
+
+        // Entries are process names (".exe" optional), optionally followed by ":" and text the window title must contain,
+        // so a browser-based Remote Desktop client can be matched without capturing Ctrl+V in every browser tab.
+        public bool IsTypeOnPasteApp(string processPath, string windowTitle)
+        {
+            if (String.IsNullOrEmpty(processPath) || String.IsNullOrEmpty(TypeOnPasteApps)) return false;
+            string name = StripExe(Path.GetFileName(processPath));
+            string[] entries = TypeOnPasteApps.Split(',', ';');
+            for (int i = 0; i < entries.Length; i++)
+            {
+                string entry = entries[i].Trim(), title = null; int colon = entry.IndexOf(':'); if (colon >= 0) { title = entry.Substring(colon + 1).Trim(); entry = entry.Substring(0, colon).Trim(); }
+                if (entry.Length == 0 || !StripExe(entry).Equals(name, StringComparison.OrdinalIgnoreCase)) continue;
+                if (String.IsNullOrEmpty(title) || windowTitle != null && windowTitle.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+            return false;
+        }
+        private static string StripExe(string name) { return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 4) : name; }
 
         // The serializer skips field initializers, so settings missing from older files would otherwise load as zero.
         [OnDeserializing] private void OnDeserializing(StreamingContext context) { CopyFrom(new PasterConfig()); }

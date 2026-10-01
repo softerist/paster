@@ -6,7 +6,7 @@ namespace Paster.Core
     public sealed class TransferCoordinator
     {
         private readonly ITextCapturePlatform platform; private readonly IClock clock; private readonly PasterConfig config;
-        private readonly object gate = new object(); private string captured; private CancellationTokenSource cancellation; private string lastError; private bool captureInProgress; private IntPtr transferTarget;
+        private readonly object gate = new object(); private string captured; private CancellationTokenSource cancellation; private string lastError; private bool captureInProgress; private IntPtr transferTarget; private uint capturedSequence;
         public TransferCoordinator(ITextCapturePlatform p, IClock c, PasterConfig cfg) { platform = p; clock = c; config = cfg; config.Validate(); }
         public TransferStatus Status { get { lock (gate) { return new TransferStatus { HasCapture = captured != null, IsTransferring = cancellation != null, IsInputAvailable = platform.IsInputAvailable, LastError = lastError, TargetWindow = transferTarget }; } } }
         public void Clear() { lock (gate) { captured = null; } }
@@ -18,7 +18,7 @@ namespace Paster.Core
                 uint sequence = platform.ClipboardSequence;
                 if (!platform.SendCopyShortcut()) return Fail("Copy shortcut could not be sent.");
                 DateTime end = DateTime.UtcNow.AddMilliseconds(config.ClipboardTimeoutMilliseconds); string text;
-                do { if (platform.ClipboardSequence != sequence && platform.TryReadClipboard(out text) && text != null) { if (text.Length > config.MaximumTextCharacters) return Fail("Clipboard text exceeds the configured size limit."); lock (gate) { captured = text; lastError = null; } return true; } clock.Sleep(20, CancellationToken.None); } while (DateTime.UtcNow < end);
+                do { uint current = platform.ClipboardSequence; if (current != sequence && platform.TryReadClipboard(out text) && text != null) { if (text.Length > config.MaximumTextCharacters) return Fail("Clipboard text exceeds the configured size limit."); lock (gate) { captured = text; capturedSequence = current; lastError = null; } return true; } clock.Sleep(20, CancellationToken.None); } while (DateTime.UtcNow < end);
                 return Fail("Clipboard did not provide fresh Unicode text before the timeout.");
             }
             finally { lock (gate) { captureInProgress = false; } }
@@ -26,16 +26,20 @@ namespace Paster.Core
         public bool Transfer()
         {
             string text;
+            // The clipboard is read outside the lock: a clipboard owned by a remote session can take seconds to render, and Status callers must not wait on it.
+            uint sequence = platform.ClipboardSequence; bool useClipboard; lock (gate) { useClipboard = captured == null || sequence != capturedSequence; }
+            string clipboard = null; if (useClipboard) platform.TryReadClipboard(out clipboard);
             lock (gate)
             {
                 if (captureInProgress) return Fail("A capture is still in progress.", false);
                 if (cancellation != null) return Fail("A transfer is already in progress.", false);
                 if (!platform.IsInputAvailable) return Fail("Windows input is unavailable.", false);
+                // Whichever is newer wins: text copied normally after a capture replaces it, so plain Ctrl+C works as the copy step.
                 text = captured;
-                if (text == null)
+                if (useClipboard || text == null)
                 {
-                    if (!platform.TryReadClipboard(out text) || text == null) return Fail("No captured text or clipboard text is available.", false);
-                    if (text.Length > config.MaximumTextCharacters) return Fail("Clipboard text exceeds the configured size limit.", false);
+                    if (clipboard != null) { if (clipboard.Length > config.MaximumTextCharacters) return Fail("Clipboard text exceeds the configured size limit.", false); text = clipboard; }
+                    else if (text == null) return Fail("No captured text or clipboard text is available.", false);
                 }
                 cancellation = new CancellationTokenSource(); transferTarget = platform.ForegroundWindow; lastError = null;
             }
