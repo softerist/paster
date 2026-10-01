@@ -231,21 +231,35 @@ executable, and starts that newly built version.
 
 ## Configuration
 
-| Setting | Default | Range |
-| --- | --- | --- |
-| Capture shortcut | `Ctrl+Shift+C` | |
-| Paste shortcut | `Ctrl+Shift+V` | |
-| Cancel shortcut | `Ctrl+Shift+X` | |
-| Start delay | 0 ms | 0-60,000 ms |
-| Delay per batch | 2 ms | 0-60,000 ms |
-| Characters per batch | 32 | 1-4,096 |
-| Clipboard timeout | 2,000 ms | 100-120,000 ms |
-| Maximum text | 16,777,216 UTF-16 characters | 1-268,435,456 |
-| Confirm pastes over | 2,000 lines | 0 (never)-100,000,000 lines |
-| Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | |
-| Remote speed | 500 characters per second | 0 (unlimited)-100,000 |
-| Use code mode for Ctrl+V into remote windows | On | On or off |
-| Type text copied inside remote windows | On | On or off |
+Settings live in `%LOCALAPPDATA%\Paster\settings.json`. When Paster starts it
+writes the file with every option (one per line) if it is missing, and adds any
+options introduced since the file was written. A file that cannot be read or
+contains invalid values is never overwritten; Paster runs with the defaults
+instead, so fix the file and restart.
+
+| JSON key | Settings dialog | Default | Range or values |
+| --- | --- | --- | --- |
+| `captureShortcut` | Capture shortcut | `Ctrl+Shift+C` | Shortcut |
+| `pasteShortcut` | Paste shortcut | `Ctrl+Shift+V` | Shortcut |
+| `cancelShortcut` | Cancel shortcut | `Ctrl+Shift+X` | Shortcut |
+| `anyOrderShortcuts` | Shortcuts work in any key order | `true` | `false`: the key must be pressed last |
+| `startDelayMilliseconds` | Start delay (ms) | `0` | 0-60,000 |
+| `characterDelayMilliseconds` | Delay per batch (ms) | `2` | 0-60,000 |
+| `charactersPerBatch` | Characters per batch | `32` | 1-4,096 |
+| `typeShiftedAsUnicode` | Type uppercase and symbols as Unicode | `true` | `false`: type them with Shift (can trigger Sticky Keys) |
+| `stopOnUserInput` | Stop typing on key press or click | `true` | `false`: only the cancel shortcut and focus changes stop typing |
+| `clipboardTimeoutMilliseconds` | Clipboard timeout (ms) | `2000` | 100-120,000 |
+| `maximumTextCharacters` | Maximum characters | `16777216` | 1-268,435,456 |
+| `confirmAboveLines` | Confirm pastes over (lines) | `2000` | 0 (never confirm or resume)-100,000,000 |
+| `promptTimeoutSeconds` | Prompt timeout (s) | `120` | 10-3,600 |
+| `typeOnCtrlV` | Type on Ctrl+V in listed apps | `true` | `false`: `Ctrl+V` is never intercepted |
+| `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
+| `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
+| `codeModeForRemotePaste` | Use code mode for Ctrl+V into remote windows | `true` | `false`: plain typing |
+| `codeModeEscapeBeforeEnter` | Code mode: Escape before Enter and Tab | `true` | |
+| `codeModeHomeAfterEnter` | Code mode: Home after Enter | `true` | |
+| `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `true` | Turn off for editors that do not auto-close (Notepad++ by default) |
+| `remoteCharactersPerSecond` | Remote speed (chars/s) | `500` | 0 (unlimited)-100,000 |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
@@ -253,10 +267,9 @@ one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
 lower the batch size or raise the delay per batch.
 
 Open the settings dialog with `--settings`; it validates all values before
-saving. Settings are stored in `%LOCALAPPDATA%\Paster\settings.json`; settings
-missing from an older file load with their defaults. Delay, speed, size, and
-application-list changes apply to subsequent operations in the running process.
-Restart Paster after changing shortcuts so they can be re-registered.
+saving, and changes apply to the running process except shortcuts, which need
+a restart to be re-registered. Edits made directly to `settings.json` take
+effect after Paster restarts.
 
 ## Management commands
 

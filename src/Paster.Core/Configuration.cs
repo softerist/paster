@@ -1,27 +1,38 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Xml;
 
 namespace Paster.Core
 {
     [DataContract]
     public sealed class PasterConfig
     {
-        [DataMember(Name="captureShortcut")] public string CaptureShortcut = "Ctrl+Shift+C";
-        [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Shift+V";
-        [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Shift+X";
-        [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 0;
-        [DataMember(Name="characterDelayMilliseconds")] public int CharacterDelayMilliseconds = 2;
-        [DataMember(Name="charactersPerBatch")] public int CharactersPerBatch = 32;
-        [DataMember(Name="clipboardTimeoutMilliseconds")] public int ClipboardTimeoutMilliseconds = 2000;
-        [DataMember(Name="maximumTextCharacters")] public int MaximumTextCharacters = 16 * 1024 * 1024;
-        [DataMember(Name="confirmAboveLines")] public int ConfirmAboveLines = 2000;
-        [DataMember(Name="remoteCharactersPerSecond")] public int RemoteCharactersPerSecond = 500;
-        [DataMember(Name="codeModeForRemotePaste")] public bool CodeModeForRemotePaste = true;
-        [DataMember(Name="typeRemoteCopies")] public bool TypeRemoteCopies = true;
-        [DataMember(Name="typeOnPasteApps")] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
+        // Order groups the settings file by topic; every option has a default, so a hand-edited file may omit any of them.
+        [DataMember(Name="captureShortcut", Order=1)] public string CaptureShortcut = "Ctrl+Shift+C";
+        [DataMember(Name="pasteShortcut", Order=2)] public string PasteShortcut = "Ctrl+Shift+V";
+        [DataMember(Name="cancelShortcut", Order=3)] public string CancelShortcut = "Ctrl+Shift+X";
+        [DataMember(Name="anyOrderShortcuts", Order=4)] public bool AnyOrderShortcuts = true;
+        [DataMember(Name="startDelayMilliseconds", Order=5)] public int StartDelayMilliseconds = 0;
+        [DataMember(Name="characterDelayMilliseconds", Order=6)] public int CharacterDelayMilliseconds = 2;
+        [DataMember(Name="charactersPerBatch", Order=7)] public int CharactersPerBatch = 32;
+        [DataMember(Name="typeShiftedAsUnicode", Order=8)] public bool TypeShiftedAsUnicode = true;
+        [DataMember(Name="stopOnUserInput", Order=9)] public bool StopOnUserInput = true;
+        [DataMember(Name="clipboardTimeoutMilliseconds", Order=10)] public int ClipboardTimeoutMilliseconds = 2000;
+        [DataMember(Name="maximumTextCharacters", Order=11)] public int MaximumTextCharacters = 16 * 1024 * 1024;
+        [DataMember(Name="confirmAboveLines", Order=12)] public int ConfirmAboveLines = 2000;
+        [DataMember(Name="promptTimeoutSeconds", Order=13)] public int PromptTimeoutSeconds = 120;
+        [DataMember(Name="typeOnCtrlV", Order=14)] public bool TypeOnCtrlV = true;
+        [DataMember(Name="typeOnPasteApps", Order=15)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
+        [DataMember(Name="typeRemoteCopies", Order=16)] public bool TypeRemoteCopies = true;
+        [DataMember(Name="codeModeForRemotePaste", Order=17)] public bool CodeModeForRemotePaste = true;
+        [DataMember(Name="codeModeEscapeBeforeEnter", Order=18)] public bool CodeModeEscapeBeforeEnter = true;
+        [DataMember(Name="codeModeHomeAfterEnter", Order=19)] public bool CodeModeHomeAfterEnter = true;
+        [DataMember(Name="codeModeDeleteAutoClosed", Order=20)] public bool CodeModeDeleteAutoClosed = true;
+        [DataMember(Name="remoteCharactersPerSecond", Order=21)] public int RemoteCharactersPerSecond = 500;
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
 
@@ -36,11 +47,14 @@ namespace Paster.Core
             if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds");
             if (RemoteCharactersPerSecond < 0 || RemoteCharactersPerSecond > 100000) throw new ArgumentOutOfRangeException("RemoteCharactersPerSecond", "Remote speed must be between 0 (unlimited) and 100000 characters per second.");
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > MaximumTextLimit) throw new ArgumentOutOfRangeException("MaximumTextCharacters", "Maximum characters must be between 1 and " + MaximumTextLimit.ToString("N0") + ".");
+            if (PromptTimeoutSeconds < 10 || PromptTimeoutSeconds > 3600) throw new ArgumentOutOfRangeException("PromptTimeoutSeconds", "Prompt timeout must be between 10 and 3600 seconds.");
             if (ConfirmAboveLines < 0 || ConfirmAboveLines > 100000000) throw new ArgumentOutOfRangeException("ConfirmAboveLines", "Confirmation threshold must be between 0 (never) and 100000000 lines.");
         }
 
-        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, CharactersPerBatch = CharactersPerBatch, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters, ConfirmAboveLines = ConfirmAboveLines, RemoteCharactersPerSecond = RemoteCharactersPerSecond, CodeModeForRemotePaste = CodeModeForRemotePaste, TypeRemoteCopies = TypeRemoteCopies, TypeOnPasteApps = TypeOnPasteApps }; }
-        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; CharactersPerBatch = other.CharactersPerBatch; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; ConfirmAboveLines = other.ConfirmAboveLines; RemoteCharactersPerSecond = other.RemoteCharactersPerSecond; CodeModeForRemotePaste = other.CodeModeForRemotePaste; TypeRemoteCopies = other.TypeRemoteCopies; TypeOnPasteApps = other.TypeOnPasteApps; }
+        // Every field is a value type or string, so a shallow copy is complete and new settings can never be forgotten here.
+        public CodeModeKeys CodeModeKeys { get { return (CodeModeEscapeBeforeEnter ? CodeModeKeys.EscapeBeforeEnter : 0) | (CodeModeHomeAfterEnter ? CodeModeKeys.HomeAfterEnter : 0) | (CodeModeDeleteAutoClosed ? CodeModeKeys.DeleteAutoClosed : 0); } }
+        public PasterConfig Clone() { return (PasterConfig)MemberwiseClone(); }
+        public void CopyFrom(PasterConfig other) { foreach (FieldInfo field in typeof(PasterConfig).GetFields(BindingFlags.Public | BindingFlags.Instance)) field.SetValue(this, field.GetValue(other)); }
 
         // Entries are process names (".exe" optional), optionally followed by ":" and text the window title must contain,
         // so a browser-based Remote Desktop client can be matched without capturing Ctrl+V in every browser tab.
@@ -62,17 +76,28 @@ namespace Paster.Core
         // The serializer skips field initializers, so settings missing from older files would otherwise load as zero.
         [OnDeserializing] private void OnDeserializing(StreamingContext context) { CopyFrom(new PasterConfig()); }
 
-        public static PasterConfig Load(string path)
+        public static PasterConfig Load(string path) { return File.Exists(path) ? TryRead(path) ?? new PasterConfig() : new PasterConfig(); }
+
+        // Leaves a complete settings file behind so every option is visible and editable: a missing file gets the defaults and a readable
+        // one gains options added since it was written. An unreadable or invalid file is left untouched, so a typo never wipes the settings.
+        public static PasterConfig LoadOrCreate(string path)
         {
-            if (!File.Exists(path)) return new PasterConfig();
+            PasterConfig c = File.Exists(path) ? TryRead(path) : new PasterConfig();
+            if (c == null) return new PasterConfig();
+            try { c.Save(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            return c;
+        }
+
+        private static PasterConfig TryRead(string path)
+        {
             try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); if (c.StartDelayMilliseconds == 250) c.StartDelayMilliseconds = 0; c.Validate(); return c; } }
-            catch { return new PasterConfig(); }
+            catch { return null; }
         }
 
         public void Save(string path)
         {
             Validate(); string dir = Path.GetDirectoryName(path); if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            string temp = path + ".tmp"; using (FileStream s = File.Create(temp)) { new DataContractJsonSerializer(typeof(PasterConfig)).WriteObject(s, this); }
+            string temp = path + ".tmp"; using (FileStream s = File.Create(temp)) using (XmlDictionaryWriter writer = JsonReaderWriterFactory.CreateJsonWriter(s, new UTF8Encoding(false), false, true, "  ")) { new DataContractJsonSerializer(typeof(PasterConfig)).WriteObject(writer, this); writer.Flush(); }
             if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
         }
     }
