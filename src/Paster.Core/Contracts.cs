@@ -13,6 +13,7 @@ namespace Paster.Core
         bool SendText(string text);
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
+        bool IsRemoteWindow(IntPtr window);
     }
     public interface IClock { void Sleep(int milliseconds, CancellationToken token); }
     public sealed class TransferStatus

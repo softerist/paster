@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 
 namespace Paster.Core
@@ -45,7 +46,10 @@ namespace Paster.Core
             }
             IntPtr target; CancellationToken token; lock (gate) { target = transferTarget; token = cancellation.Token; }
             if (text.IndexOf('\r') >= 0) text = text.Replace("\r\n", "\n").Replace('\r', '\n');
-            try { clock.Sleep(config.StartDelayMilliseconds, token); for (int i = 0; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(config.CharactersPerBatch, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; if (!platform.SendText(text.Substring(i, length))) throw new InvalidOperationException("Windows input rejected a text batch."); i += length; clock.Sleep(config.CharacterDelayMilliseconds, token); } return true; }
+            // Remote clients consume input far slower than SendInput accepts it; anything sent ahead of them queues up where cancellation
+            // can no longer reach it. Pacing remote targets in ~10 ms batches keeps that backlog small so interruption stays immediate.
+            int rate = platform.IsRemoteWindow(target) ? config.RemoteCharactersPerSecond : 0; int batchSize = rate > 0 ? Math.Max(1, Math.Min(config.CharactersPerBatch, rate / 100)) : config.CharactersPerBatch; Stopwatch paced = Stopwatch.StartNew();
+            try { clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = 0; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; if (!platform.SendText(text.Substring(i, length))) throw new InvalidOperationException("Windows input rejected a text batch."); i += length; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, (long)i * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); } return true; }
             catch (OperationCanceledException) { Fail("Transfer cancelled.", false); return false; } catch (Exception ex) { Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
         }
         public void Cancel() { lock (gate) { if (cancellation != null) cancellation.Cancel(); } }

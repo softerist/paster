@@ -132,6 +132,7 @@ executable, and starts that newly built version.
 - Start delay: 0 ms
 - Characters per batch: 32
 - Delay per batch: 2 ms
+- Remote speed: 500 characters per second
 - Clipboard timeout: 2,000 ms
 - Maximum text: 1,048,576 UTF-16 characters
 
@@ -143,6 +144,13 @@ all configured ranges before saving.
 Each batch is sent as one atomic `SendInput` call, and Paster requests a 1 ms
 system timer while typing so short delays are honored. If a destination drops
 characters, lower the batch size or raise the delay.
+
+Windows on the remote-application list (see "Ctrl+V in Remote Desktop") are
+typed at the remote speed instead (0-100,000 characters per second; 0 removes
+the limit). Remote clients accept keystrokes much faster than they can deliver
+them, and keystrokes already queued in the client or the remote session cannot
+be cancelled. If text keeps appearing after you interrupt a transfer, lower the
+remote speed; if interruption is immediate, you can raise it.
 
 Settings are stored in `%LOCALAPPDATA%\Paster\settings.json`. Delay and size
 changes apply to subsequent operations in the running process. Restart Paster

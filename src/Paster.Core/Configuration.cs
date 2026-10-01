@@ -17,6 +17,7 @@ namespace Paster.Core
         [DataMember(Name="charactersPerBatch")] public int CharactersPerBatch = 32;
         [DataMember(Name="clipboardTimeoutMilliseconds")] public int ClipboardTimeoutMilliseconds = 2000;
         [DataMember(Name="maximumTextCharacters")] public int MaximumTextCharacters = 1024 * 1024;
+        [DataMember(Name="remoteCharactersPerSecond")] public int RemoteCharactersPerSecond = 500;
         [DataMember(Name="typeOnPasteApps")] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
 
         public void Validate()
@@ -28,11 +29,12 @@ namespace Paster.Core
             if (CharacterDelayMilliseconds < 0 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds", "Batch delay must be between 0 and 60000 milliseconds.");
             if (CharactersPerBatch < 1 || CharactersPerBatch > 4096) throw new ArgumentOutOfRangeException("CharactersPerBatch", "Characters per batch must be between 1 and 4096.");
             if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds");
+            if (RemoteCharactersPerSecond < 0 || RemoteCharactersPerSecond > 100000) throw new ArgumentOutOfRangeException("RemoteCharactersPerSecond", "Remote speed must be between 0 (unlimited) and 100000 characters per second.");
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > 16 * 1024 * 1024) throw new ArgumentOutOfRangeException("MaximumTextCharacters");
         }
 
-        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, CharactersPerBatch = CharactersPerBatch, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters, TypeOnPasteApps = TypeOnPasteApps }; }
-        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; CharactersPerBatch = other.CharactersPerBatch; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; TypeOnPasteApps = other.TypeOnPasteApps; }
+        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, CharactersPerBatch = CharactersPerBatch, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters, RemoteCharactersPerSecond = RemoteCharactersPerSecond, TypeOnPasteApps = TypeOnPasteApps }; }
+        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; CharactersPerBatch = other.CharactersPerBatch; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; RemoteCharactersPerSecond = other.RemoteCharactersPerSecond; TypeOnPasteApps = other.TypeOnPasteApps; }
 
         // Entries are process names (".exe" optional), optionally followed by ":" and text the window title must contain,
         // so a browser-based Remote Desktop client can be matched without capturing Ctrl+V in every browser tab.

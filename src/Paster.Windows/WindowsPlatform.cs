@@ -63,7 +63,8 @@ namespace Paster.Windows
         private void TrackRemoteCopy(int vk, uint mods) { if ((mods==MOD_CONTROL && (vk==0x43 || vk==0x58 || vk==0x2D) || mods==MOD_SHIFT && vk==0x2E) && IsTypeOnPasteTarget()) typeClipboardOnPaste=false; }
         // Clipboard changes made while a listed app is in front come from the remote session (redirection) and paste natively; local text changes are typed.
         private void OnClipboardUpdate() { typeClipboardOnPaste=IsClipboardFormatAvailable(CF_UNICODETEXT) && !IsTypeOnPasteTarget(); }
-        private bool IsTypeOnPasteTarget() { IntPtr window=GetForegroundWindow(); return config.IsTypeOnPasteApp(ProcessPath(window),WindowTitle(window)); }
+        private bool IsTypeOnPasteTarget() { return IsRemoteWindow(GetForegroundWindow()); }
+        public bool IsRemoteWindow(IntPtr window) { return config.IsTypeOnPasteApp(ProcessPath(window),WindowTitle(window)); }
         private static string WindowTitle(IntPtr window) { StringBuilder title=new StringBuilder(512); return GetWindowText(window,title,title.Capacity)>0 ? title.ToString() : null; }
         private static string ProcessPath(IntPtr window) { uint pid; GetWindowThreadProcessId(window,out pid); if (pid==0) return null; IntPtr process=OpenProcess(0x1000,false,pid); if (process==IntPtr.Zero) return null; try { StringBuilder path=new StringBuilder(1024); int size=path.Capacity; return QueryFullProcessImageName(process,0,path,ref size) ? path.ToString() : null; } finally { CloseHandle(process); } }
         private static uint CurrentModifiers(int vk, bool down) { return (IsDown(0xA2,vk,down)||IsDown(0xA3,vk,down)?MOD_CONTROL:0)|(IsDown(0xA0,vk,down)||IsDown(0xA1,vk,down)?MOD_SHIFT:0)|(IsDown(0xA4,vk,down)||IsDown(0xA5,vk,down)?MOD_ALT:0)|(IsDown(0x5B,vk,down)||IsDown(0x5C,vk,down)?MOD_WIN:0); }

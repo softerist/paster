@@ -9,7 +9,7 @@ namespace Paster.CoreTests
 {
     internal sealed class FakePlatform : ITextCapturePlatform
     {
-        public IntPtr ForegroundWindow = new IntPtr(1); public bool CopyWorks = true; public string Clipboard; public bool InputWorks = true; public bool ChangeAfterFirst; public bool UserInterruption; public uint Sequence; public List<string> Units = new List<string>();
+        public IntPtr ForegroundWindow = new IntPtr(1); public bool CopyWorks = true; public string Clipboard; public bool InputWorks = true; public bool ChangeAfterFirst; public bool UserInterruption; public bool Remote; public uint Sequence; public List<string> Units = new List<string>();
         IntPtr ITextCapturePlatform.ForegroundWindow { get { return (ChangeAfterFirst && Units.Count > 0) ? new IntPtr(2) : ForegroundWindow; } }
         public bool IsInputAvailable { get { return InputWorks; } }
         public uint ClipboardSequence { get { return Sequence; } }
@@ -17,6 +17,7 @@ namespace Paster.CoreTests
         public bool TryReadClipboard(out string text) { text = Clipboard; return text != null; }
         public bool SendText(string text) { if (!InputWorks) return false; Units.Add(text); return true; }
         public bool IsUserInterruptionRequested { get { return UserInterruption; } }
+        public bool IsRemoteWindow(IntPtr window) { return Remote; }
     }
     internal sealed class FakeClock : IClock { public Action<int> OnSleep; private bool fired; public void Sleep(int milliseconds, CancellationToken token) { token.ThrowIfCancellationRequested(); if(!fired && OnSleep!=null) { fired=true; OnSleep(milliseconds); } token.ThrowIfCancellationRequested(); } }
     internal static class Program
@@ -46,6 +47,7 @@ namespace Paster.CoreTests
             Test("capture is kept when the clipboard changes to non-text", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="captured"; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),new PasterConfig()); Assert(c.Capture(),"capture"); p.Clipboard=null; p.Sequence++; Assert(c.Transfer(),"transfer"); Assert(String.Join("",p.Units.ToArray())=="captured","capture lost"); });
             Test("type-on-paste app matching", delegate { PasterConfig cfg=new PasterConfig(); Assert(cfg.IsTypeOnPasteApp(@"C:\Windows\System32\mstsc.exe",null),"full path"); Assert(cfg.IsTypeOnPasteApp("MSRDC","x"),"name without extension"); Assert(!cfg.IsTypeOnPasteApp("notepad.exe","Windows Cloud"),"unlisted app matched"); Assert(!cfg.IsTypeOnPasteApp(null,null),"null matched"); cfg.TypeOnPasteApps="vmconnect; wfica32.exe"; Assert(cfg.IsTypeOnPasteApp("vmconnect.exe",null) && cfg.IsTypeOnPasteApp("wfica32.exe",null) && !cfg.IsTypeOnPasteApp("mstsc.exe",null),"custom list"); cfg.TypeOnPasteApps=""; Assert(!cfg.IsTypeOnPasteApp("mstsc.exe",null),"empty list matched"); });
             Test("browser clients match only by window title", delegate { PasterConfig cfg=new PasterConfig(); Assert(cfg.IsTypeOnPasteApp(@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe","Windows Cloud - Energinet AVD Windows 11"),"web client not matched"); Assert(!cfg.IsTypeOnPasteApp("msedge.exe","Inbox - Outlook"),"ordinary browser tab matched"); Assert(!cfg.IsTypeOnPasteApp("msedge.exe",null),"untitled browser matched"); });
+            Test("remote targets are paced in small batches", delegate { FakePlatform p=new FakePlatform(); p.Clipboard="abcdefg"; p.Remote=true; PasterConfig cfg=new PasterConfig(); cfg.RemoteCharactersPerSecond=300; TransferCoordinator c=new TransferCoordinator(p,new FakeClock(),cfg); Assert(c.Transfer(),"transfer"); Assert(String.Join("|",p.Units.ToArray())=="abc|def|g","remote batches: "+String.Join("|",p.Units.ToArray())); p.Units.Clear(); cfg.RemoteCharactersPerSecond=0; Assert(c.Transfer(),"unlimited transfer"); Assert(p.Units.Count==1,"unlimited remote speed still paced"); });
             Console.WriteLine("{0} tests passed", passed); return 0;
         }
     }
