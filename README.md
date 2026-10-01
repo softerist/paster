@@ -124,23 +124,26 @@ indentation after Enter, insert closing brackets and quotes, and accept
 autocomplete or inline suggestions on Enter and Tab. Typed code then arrives
 with doubled indentation, extra brackets, or replaced words. Paster cannot see
 which application is focused inside a remote session, so for `Ctrl+V` into a
-remote window it can type in code mode (on by default; toggle it in the
-settings dialog):
+remote window it can type in code mode (on by default; each key can be turned
+on or off in the settings dialog):
 
-- **Escape** before each Enter and Tab closes suggestion popups first.
-- **Home** after each Enter moves before any auto-inserted indentation, so the
-  line's own indentation is typed exactly. The editor's indentation ends up at
-  the end of the line; most editors remove or replace it on the next Enter, but
-  the last line can keep trailing whitespace.
-- **Delete** after each `(`, `[`, `{`, `"`, `'`, and `` ` `` removes a closing
-  character the editor inserted automatically.
+- **Home** after each Enter (on by default) moves before any auto-inserted
+  indentation, so the line's own indentation is typed exactly. The editor's
+  indentation ends up at the end of the line; most editors remove or replace it
+  on the next Enter, but the last line can keep trailing whitespace. It never
+  removes existing text, so it is safe in terminals, documents, and chats.
+- **Escape** before each Enter and Tab (off by default) closes suggestion
+  popups so Enter or Tab cannot accept them. It also clears the current line in
+  PowerShell and cmd, cancels spreadsheet cell edits, and can close dialogs, so
+  turn it on only if you paste mainly into code editors.
+- **Delete** after each `(`, `[`, `{`, `"`, `'`, and `` ` `` (off by default)
+  removes a closing character the editor inserted automatically. It assumes you
+  are typing at the end of a document into an editor that auto-closes (VS Code
+  does; Notepad++ does not by default); anywhere else it deletes the next
+  character of existing text.
 
-Code mode assumes you are typing at the end of a document (for example into an
-empty file). Its extra keys can have side effects elsewhere: Escape can close
-dialogs or cancel cell edits, and Delete removes the character after the cursor
-when the editor did not auto-close. Turn code mode off for remote pastes into
-documents, spreadsheets, or forms, or use `Ctrl+Shift+V`, which always types
-plain text. Editors that auto-close HTML tags are not covered.
+`Ctrl+Shift+V` always types plain text without code mode. Editors that
+auto-close HTML tags are not covered.
 
 ## Transfer safety and interruption
 
@@ -234,8 +237,10 @@ executable, and starts that newly built version.
 Settings live in `%LOCALAPPDATA%\Paster\settings.json`. When Paster starts it
 writes the file with every option (one per line) if it is missing, and adds any
 options introduced since the file was written. A file that cannot be read or
-contains invalid values is never overwritten; Paster runs with the defaults
-instead, so fix the file and restart.
+contains invalid values is never overwritten at startup; Paster runs with the
+defaults instead, so fix the file and restart. The settings dialog starts from
+the file's current values, so edits made by hand while Paster runs are kept
+when you save there.
 
 | JSON key | Settings dialog | Default | Range or values |
 | --- | --- | --- | --- |
@@ -256,10 +261,10 @@ instead, so fix the file and restart.
 | `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
 | `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
 | `codeModeForRemotePaste` | Use code mode for Ctrl+V into remote windows | `true` | `false`: plain typing |
-| `codeModeEscapeBeforeEnter` | Code mode: Escape before Enter and Tab | `true` | |
+| `codeModeEscapeBeforeEnter` | Code mode: Escape before Enter and Tab | `false` | Clears terminal lines and cancels spreadsheet cell edits |
 | `codeModeHomeAfterEnter` | Code mode: Home after Enter | `true` | |
-| `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `true` | Turn off for editors that do not auto-close (Notepad++ by default) |
-| `remoteCharactersPerSecond` | Remote speed (chars/s) | `500` | 0 (unlimited)-100,000 |
+| `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `false` | Only safe when typing at the end of a document into an editor that auto-closes |
+| `remoteCharactersPerSecond` | Remote speed (keys/s) | `500` | Keystrokes per second; 0 (unlimited)-100,000 |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
@@ -269,7 +274,10 @@ lower the batch size or raise the delay per batch.
 Open the settings dialog with `--settings`; it validates all values before
 saving, and changes apply to the running process except shortcuts, which need
 a restart to be re-registered. Edits made directly to `settings.json` take
-effect after Paster restarts.
+effect after Paster restarts or when you save the settings dialog. The remote
+speed counts keystrokes, so code mode's extra keys are paced too. With
+`typeShiftedAsUnicode` off, letters typed with Shift come out in the wrong case
+while Caps Lock is on.
 
 ## Management commands
 

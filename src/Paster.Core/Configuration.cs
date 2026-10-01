@@ -11,6 +11,8 @@ namespace Paster.Core
     [DataContract]
     public sealed class PasterConfig
     {
+        // Code mode defaults to Home only: it never removes existing text. Escape (clears terminal lines, cancels cell edits) and Delete
+        // (eats text unless typing at the end of a document) are opt-in.
         // Order groups the settings file by topic; every option has a default, so a hand-edited file may omit any of them.
         [DataMember(Name="captureShortcut", Order=1)] public string CaptureShortcut = "Ctrl+Shift+C";
         [DataMember(Name="pasteShortcut", Order=2)] public string PasteShortcut = "Ctrl+Shift+V";
@@ -29,9 +31,9 @@ namespace Paster.Core
         [DataMember(Name="typeOnPasteApps", Order=15)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
         [DataMember(Name="typeRemoteCopies", Order=16)] public bool TypeRemoteCopies = true;
         [DataMember(Name="codeModeForRemotePaste", Order=17)] public bool CodeModeForRemotePaste = true;
-        [DataMember(Name="codeModeEscapeBeforeEnter", Order=18)] public bool CodeModeEscapeBeforeEnter = true;
+        [DataMember(Name="codeModeEscapeBeforeEnter", Order=18)] public bool CodeModeEscapeBeforeEnter = false;
         [DataMember(Name="codeModeHomeAfterEnter", Order=19)] public bool CodeModeHomeAfterEnter = true;
-        [DataMember(Name="codeModeDeleteAutoClosed", Order=20)] public bool CodeModeDeleteAutoClosed = true;
+        [DataMember(Name="codeModeDeleteAutoClosed", Order=20)] public bool CodeModeDeleteAutoClosed = false;
         [DataMember(Name="remoteCharactersPerSecond", Order=21)] public int RemoteCharactersPerSecond = 500;
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
@@ -76,19 +78,20 @@ namespace Paster.Core
         // The serializer skips field initializers, so settings missing from older files would otherwise load as zero.
         [OnDeserializing] private void OnDeserializing(StreamingContext context) { CopyFrom(new PasterConfig()); }
 
-        public static PasterConfig Load(string path) { return File.Exists(path) ? TryRead(path) ?? new PasterConfig() : new PasterConfig(); }
+        public static PasterConfig Load(string path) { return File.Exists(path) ? TryLoad(path) ?? new PasterConfig() : new PasterConfig(); }
 
         // Leaves a complete settings file behind so every option is visible and editable: a missing file gets the defaults and a readable
         // one gains options added since it was written. An unreadable or invalid file is left untouched, so a typo never wipes the settings.
         public static PasterConfig LoadOrCreate(string path)
         {
-            PasterConfig c = File.Exists(path) ? TryRead(path) : new PasterConfig();
+            PasterConfig c = File.Exists(path) ? TryLoad(path) : new PasterConfig();
             if (c == null) return new PasterConfig();
             try { c.Save(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             return c;
         }
 
-        private static PasterConfig TryRead(string path)
+        // Null when the file is missing, unreadable, or holds invalid values.
+        public static PasterConfig TryLoad(string path)
         {
             try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); if (c.StartDelayMilliseconds == 250) c.StartDelayMilliseconds = 0; c.Validate(); return c; } }
             catch { return null; }

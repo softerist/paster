@@ -11,7 +11,7 @@ namespace Paster.Core
         uint ClipboardSequence { get; }
         bool SendCopyShortcut();
         bool TryReadClipboard(out string text);
-        bool SendText(string text, bool codeMode);
+        bool SendText(string text, CodeModeKeys codeMode);
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
         bool IsRemoteWindow(IntPtr window);
@@ -34,7 +34,14 @@ namespace Paster.Core
     public static class CodeTyping
     {
         public const string Openers = "([{\"'`";
-        public static List<TypedKey> Expand(string text, bool codeMode) { return Expand(text, codeMode ? CodeModeKeys.All : CodeModeKeys.None); }
+        // Keystrokes Expand produces for text[start, start+length), without allocating; remote pacing counts keys, not characters.
+        public static int CountKeys(string text, int start, int length, CodeModeKeys extra)
+        {
+            int escape = (extra & CodeModeKeys.EscapeBeforeEnter) != 0 ? 1 : 0, home = (extra & CodeModeKeys.HomeAfterEnter) != 0 ? 1 : 0, delete = (extra & CodeModeKeys.DeleteAutoClosed) != 0 ? 1 : 0, keys = length;
+            if (extra == CodeModeKeys.None) return keys;
+            for (int i = start; i < start + length; i++) { char ch = text[i]; if (ch == '\n') keys += escape + home; else if (ch == '\t') keys += escape; else if (Openers.IndexOf(ch) >= 0) keys += delete; }
+            return keys;
+        }
         public static List<TypedKey> Expand(string text, CodeModeKeys extra)
         {
             bool escape = (extra & CodeModeKeys.EscapeBeforeEnter) != 0, home = (extra & CodeModeKeys.HomeAfterEnter) != 0, delete = (extra & CodeModeKeys.DeleteAutoClosed) != 0;
