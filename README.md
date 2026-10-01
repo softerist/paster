@@ -13,9 +13,9 @@ the direction you need.
    accepts only fresh Unicode text from the clipboard.
 3. Focus the destination application or Remote Desktop window and press the
    paste shortcut (`Ctrl+Shift+V` by default).
-4. Paster types the captured text into that foreground window in small
-   batches. Tabs and line breaks are emitted as keyboard input, and CRLF line
-   endings are normalized to a single Enter press.
+4. Once the shortcut keys are released, Paster types the captured text into
+   that foreground window in small batches. Tabs and line breaks are emitted as
+   keyboard input, and CRLF line endings are normalized to a single Enter press.
 
 If no explicit capture is available, paste falls back to the current Unicode
 clipboard text. Capture and transfer operations cannot overlap.
@@ -141,8 +141,11 @@ directory. It does not remove unrelated user files.
 ## Current limitations
 
 - Windows 10/11 interactive user sessions are the supported environment.
-- Character mapping depends on the active keyboard layout.
-- Unicode `SendInput` handling depends on the destination application.
+- Characters typed without modifiers on the active keyboard layout are sent as
+  virtual keys; everything else (uppercase letters, shifted symbols, AltGr and
+  non-layout characters) is sent as Unicode input so Paster never presses Shift,
+  Ctrl, or Alt. Unicode `SendInput` handling depends on the destination
+  application.
 - Clipboard ownership and Windows permission policy can prevent capture or
   simulated input.
 - Local foreground monitoring cannot detect focus changes inside an RDP window.
