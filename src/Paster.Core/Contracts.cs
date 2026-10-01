@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -10,7 +11,7 @@ namespace Paster.Core
         uint ClipboardSequence { get; }
         bool SendCopyShortcut();
         bool TryReadClipboard(out string text);
-        bool SendText(string text);
+        bool SendText(string text, bool codeMode);
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
         bool IsRemoteWindow(IntPtr window);
@@ -23,6 +24,28 @@ namespace Paster.Core
         public string LastError; public bool HasCapture; public bool IsTransferring; public bool IsInputAvailable; public IntPtr TargetWindow; public int ResumeOffset; public int ResumeTotal;
     }
     public enum TransferChoice { Cancel, Start, Resume }
+    public enum KeyAction { Character, Enter, Tab, Escape, Home, Delete }
+    public struct TypedKey { public KeyAction Action; public char Character; public TypedKey(KeyAction action, char character) { Action = action; Character = character; } }
+    // Code mode counters editor automation without knowing which editor is focused (the remote app is invisible locally):
+    // Escape closes suggestion popups before Enter/Tab can accept them, Home after Enter moves before auto-inserted indentation so the
+    // line's own indentation is typed exactly, and Delete after an opener removes an auto-closed bracket or quote. Delete assumes typing
+    // at the end of a document, where nothing but auto-inserted text follows the cursor.
+    public static class CodeTyping
+    {
+        public const string Openers = "([{\"'`";
+        public static List<TypedKey> Expand(string text, bool codeMode)
+        {
+            List<TypedKey> keys = new List<TypedKey>(text.Length * (codeMode ? 2 : 1));
+            for (int i = 0; i < text.Length; i++)
+            {
+                char ch = text[i];
+                if (ch == '\n') { if (codeMode) keys.Add(new TypedKey(KeyAction.Escape, '\0')); keys.Add(new TypedKey(KeyAction.Enter, '\0')); if (codeMode) keys.Add(new TypedKey(KeyAction.Home, '\0')); }
+                else if (ch == '\t') { if (codeMode) keys.Add(new TypedKey(KeyAction.Escape, '\0')); keys.Add(new TypedKey(KeyAction.Tab, '\0')); }
+                else { keys.Add(new TypedKey(KeyAction.Character, ch)); if (codeMode && Openers.IndexOf(ch) >= 0) keys.Add(new TypedKey(KeyAction.Delete, '\0')); }
+            }
+            return keys;
+        }
+    }
     public sealed class TransferPrompt
     {
         public IntPtr TargetWindow; public int ResumeOffset; public string Message; public CancellationToken Cancellation;

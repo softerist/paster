@@ -72,9 +72,14 @@ dialog; changes apply immediately, and an empty list disables the feature.
 
 - the clipboard holds no text (files and images pass through to the session),
 - you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
-  `Ctrl+Insert`, or `Shift+Delete`) since the last local copy, or
-- the clipboard last changed while the remote session was in front, which is
-  how redirected remote copies arrive.
+  `Ctrl+Insert`, or `Shift+Delete`) since the last local copy. Clipboard
+  changes in the following five seconds count as that remote copy arriving
+  through redirection.
+
+Any other clipboard change with text switches `Ctrl+V` back to typing, no
+matter which window was in front: clicking into a remote window can make the
+source application or the client touch the clipboard again with the same text.
+`--status` shows the current `Ctrl+V` mode and why.
 
 Copy locally again to switch back to typing, or use `Ctrl+Shift+V` to type
 regardless.
@@ -100,7 +105,9 @@ Limitations:
 - Paster cannot tell whether a native paste succeeded, so the choice is made by
   destination application and clipboard origin, not by trying a paste first.
 - A copy made inside the remote session with the mouse (context menu) is not
-  detected; use `Ctrl+C` there or copy locally.
+  detected. With clipboard redirection on, the copied text is typed instead of
+  pasted (same text, just slower); with redirection blocked, `Ctrl+V` types the
+  last local text. Use `Ctrl+C` there to get a native paste.
 - Copying from the remote session to the local machine is not possible when
   clipboard redirection is blocked, because the copied text stays on the remote
   clipboard.
@@ -109,6 +116,31 @@ Limitations:
   keys before Paster sees them. In `mstsc`, set "Apply Windows key
   combinations" to "On this computer" if `Ctrl+V` or key interruption stops
   working in full screen.
+
+### Code mode
+
+Code editors such as VS Code and Notepad++ react to typed keys: they add
+indentation after Enter, insert closing brackets and quotes, and accept
+autocomplete or inline suggestions on Enter and Tab. Typed code then arrives
+with doubled indentation, extra brackets, or replaced words. Paster cannot see
+which application is focused inside a remote session, so for `Ctrl+V` into a
+remote window it can type in code mode (on by default; toggle it in the
+settings dialog):
+
+- **Escape** before each Enter and Tab closes suggestion popups first.
+- **Home** after each Enter moves before any auto-inserted indentation, so the
+  line's own indentation is typed exactly. The editor's indentation ends up at
+  the end of the line; most editors remove or replace it on the next Enter, but
+  the last line can keep trailing whitespace.
+- **Delete** after each `(`, `[`, `{`, `"`, `'`, and `` ` `` removes a closing
+  character the editor inserted automatically.
+
+Code mode assumes you are typing at the end of a document (for example into an
+empty file). Its extra keys can have side effects elsewhere: Escape can close
+dialogs or cancel cell edits, and Delete removes the character after the cursor
+when the editor did not auto-close. Turn code mode off for remote pastes into
+documents, spreadsheets, or forms, or use `Ctrl+Shift+V`, which always types
+plain text. Editors that auto-close HTML tags are not covered.
 
 ## Transfer safety and interruption
 
@@ -212,6 +244,7 @@ executable, and starts that newly built version.
 | Confirm pastes over | 2,000 lines | 0 (never)-100,000,000 lines |
 | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | |
 | Remote speed | 500 characters per second | 0 (unlimited)-100,000 |
+| Use code mode for Ctrl+V into remote windows | On | On or off |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are

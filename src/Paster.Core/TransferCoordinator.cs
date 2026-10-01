@@ -24,7 +24,8 @@ namespace Paster.Core
             }
             finally { lock (gate) { captureInProgress = false; } }
         }
-        public bool Transfer()
+        public bool Transfer() { return Transfer(false); }
+        public bool Transfer(bool codeMode)
         {
             string text;
             // The clipboard is read outside the lock: a clipboard owned by a remote session can take seconds to render, and Status callers must not wait on it.
@@ -55,7 +56,7 @@ namespace Paster.Core
             try
             {
                 offset = ChooseStart(text, lines, large, target, remote, rate, batchSize, token); if (offset < 0) { Fail("Transfer cancelled.", false); return false; } sent = offset;
-                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; if (!platform.SendText(text.Substring(i, length))) throw new InvalidOperationException("Windows input rejected a text batch."); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, (long)(i - offset) * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
+                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; if (!platform.SendText(text.Substring(i, length), codeMode)) throw new InvalidOperationException("Windows input rejected a text batch."); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, (long)(i - offset) * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
                 lock (gate) { resumeText = null; resumeOffset = 0; } return true;
             }
             catch (OperationCanceledException) { if (large) SaveResumePoint(text, sent); Fail("Transfer cancelled.", false); return false; } catch (Exception ex) { if (large) SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
