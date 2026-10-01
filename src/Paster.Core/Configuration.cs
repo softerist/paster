@@ -13,7 +13,8 @@ namespace Paster.Core
         [DataMember(Name="pasteShortcut")] public string PasteShortcut = "Ctrl+Shift+V";
         [DataMember(Name="cancelShortcut")] public string CancelShortcut = "Ctrl+Shift+X";
         [DataMember(Name="startDelayMilliseconds")] public int StartDelayMilliseconds = 0;
-        [DataMember(Name="characterDelayMilliseconds")] public int CharacterDelayMilliseconds = 8;
+        [DataMember(Name="characterDelayMilliseconds")] public int CharacterDelayMilliseconds = 2;
+        [DataMember(Name="charactersPerBatch")] public int CharactersPerBatch = 32;
         [DataMember(Name="clipboardTimeoutMilliseconds")] public int ClipboardTimeoutMilliseconds = 2000;
         [DataMember(Name="maximumTextCharacters")] public int MaximumTextCharacters = 1024 * 1024;
 
@@ -23,13 +24,17 @@ namespace Paster.Core
             if (capture.Modifiers == paste.Modifiers && capture.Key == paste.Key || capture.Modifiers == cancel.Modifiers && capture.Key == cancel.Key || paste.Modifiers == cancel.Modifiers && paste.Key == cancel.Key)
                 throw new FormatException("Capture, paste, and cancel shortcuts must be different.");
             if (StartDelayMilliseconds < 0 || StartDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("StartDelayMilliseconds");
-            if (CharacterDelayMilliseconds < 8 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds", "Character delay must be between 8 and 60000 milliseconds to prevent dropped input.");
+            if (CharacterDelayMilliseconds < 0 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds", "Batch delay must be between 0 and 60000 milliseconds.");
+            if (CharactersPerBatch < 1 || CharactersPerBatch > 4096) throw new ArgumentOutOfRangeException("CharactersPerBatch", "Characters per batch must be between 1 and 4096.");
             if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds");
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > 16 * 1024 * 1024) throw new ArgumentOutOfRangeException("MaximumTextCharacters");
         }
 
-        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters }; }
-        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; }
+        public PasterConfig Clone() { return new PasterConfig { CaptureShortcut = CaptureShortcut, PasteShortcut = PasteShortcut, CancelShortcut = CancelShortcut, StartDelayMilliseconds = StartDelayMilliseconds, CharacterDelayMilliseconds = CharacterDelayMilliseconds, CharactersPerBatch = CharactersPerBatch, ClipboardTimeoutMilliseconds = ClipboardTimeoutMilliseconds, MaximumTextCharacters = MaximumTextCharacters }; }
+        public void CopyFrom(PasterConfig other) { CaptureShortcut = other.CaptureShortcut; PasteShortcut = other.PasteShortcut; CancelShortcut = other.CancelShortcut; StartDelayMilliseconds = other.StartDelayMilliseconds; CharacterDelayMilliseconds = other.CharacterDelayMilliseconds; CharactersPerBatch = other.CharactersPerBatch; ClipboardTimeoutMilliseconds = other.ClipboardTimeoutMilliseconds; MaximumTextCharacters = other.MaximumTextCharacters; }
+
+        // The serializer skips field initializers, so settings missing from older files would otherwise load as zero.
+        [OnDeserializing] private void OnDeserializing(StreamingContext context) { CopyFrom(new PasterConfig()); }
 
         public static PasterConfig Load(string path)
         {

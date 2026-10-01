@@ -10,7 +10,7 @@ namespace Paster.Core
         uint ClipboardSequence { get; }
         bool SendCopyShortcut();
         bool TryReadClipboard(out string text);
-        bool SendTextUnit(string textUnit);
+        bool SendText(string text);
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
     }

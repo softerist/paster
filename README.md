@@ -13,8 +13,8 @@ the direction you need.
    accepts only fresh Unicode text from the clipboard.
 3. Focus the destination application or Remote Desktop window and press the
    paste shortcut (`Ctrl+Shift+V` by default).
-4. Paster types the captured text into that foreground window one unit at a
-   time. Tabs and line breaks are emitted as keyboard input, and CRLF line
+4. Paster types the captured text into that foreground window in small
+   batches. Tabs and line breaks are emitted as keyboard input, and CRLF line
    endings are normalized to a single Enter press.
 
 If no explicit capture is available, paste falls back to the current Unicode
@@ -93,14 +93,19 @@ executable, and starts that newly built version.
 - Paste/type shortcut: `Ctrl+Shift+V`
 - Cancel shortcut: `Ctrl+Shift+X`
 - Start delay: 0 ms
-- Inter-character delay: 8 ms
+- Characters per batch: 32
+- Delay per batch: 2 ms
 - Clipboard timeout: 2,000 ms
 - Maximum text: 1,048,576 UTF-16 characters
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
-`Ctrl`, `Alt`, `Shift`, and `Win`. Character delay is constrained to 8-60,000
-ms; the settings dialog validates all configured ranges before saving.
+`Ctrl`, `Alt`, `Shift`, and `Win`. Characters per batch is constrained to
+1-4,096 and the delay per batch to 0-60,000 ms; the settings dialog validates
+all configured ranges before saving.
+Each batch is sent as one atomic `SendInput` call, and Paster requests a 1 ms
+system timer while typing so short delays are honored. If a destination drops
+characters, lower the batch size or raise the delay.
 
 Settings are stored in `%LOCALAPPDATA%\Paster\settings.json`. Delay and size
 changes apply to subsequent operations in the running process. Restart Paster
