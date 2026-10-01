@@ -79,6 +79,13 @@ dialog; changes apply immediately, and an empty list disables the feature.
 Copy locally again to switch back to typing, or use `Ctrl+Shift+V` to type
 regardless.
 
+If a native paste does nothing, for example in an `mstsc` session opened inside
+the browser session that blocks paste, press `Ctrl+V` again within a second:
+the second press types the clipboard text instead. This works only when text
+copied inside the remote session reached the local clipboard (the browser
+client shares it); otherwise the second press stays a native paste, so older
+local text is never typed by mistake.
+
 Listed applications are also typed at the remote speed (500 characters per
 second by default). Remote clients accept keystrokes far faster than they can
 deliver them, and keystrokes already queued in the client or the remote session
