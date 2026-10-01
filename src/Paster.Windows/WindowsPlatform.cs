@@ -25,7 +25,7 @@ namespace Paster.Windows
         // The hook counts only physical key presses, so our own injected typing can never look like a user interruption.
         public bool IsUserInterruptionRequested { get { return (hook!=IntPtr.Zero ? physicalKeyPresses!=transferKeyBaseline : UserKeyDown()) || MouseButtonDown(); } }
         // Typing while the shortcut is still physically held lets the held (and auto-repeating) modifiers turn typed text into application shortcuts.
-        public bool WaitForPasteShortcutRelease() { Paster.Core.Shortcut paste=Paster.Core.Shortcut.Parse(config.PasteShortcut); Stopwatch elapsed=Stopwatch.StartNew(); while (elapsed.ElapsedMilliseconds < 5000 && (ModifiersDown() || windowsPasteHeld || (GetAsyncKeyState((int)paste.Key)&0x8000)!=0)) Thread.Sleep(5); transferKeyBaseline=physicalKeyPresses; return !ModifiersDown() && !windowsPasteHeld && (GetAsyncKeyState((int)paste.Key)&0x8000)==0; }
+        public bool WaitForPasteShortcutRelease() { Paster.Core.Shortcut paste=Paster.Core.Shortcut.Parse(config.PasteShortcut); WaitWhile(delegate { return ModifiersDown() || windowsPasteHeld || (GetAsyncKeyState((int)paste.Key)&0x8000)!=0; },5000); transferKeyBaseline=physicalKeyPresses; return !ModifiersDown() && !windowsPasteHeld && (GetAsyncKeyState((int)paste.Key)&0x8000)==0; }
         public bool SendCopyShortcut() { Paster.Core.Shortcut capture=Paster.Core.Shortcut.Parse(config.CaptureShortcut); bool captureUsesCopy=capture.Modifiers==MOD_CONTROL && capture.Key==0x43; if(captureUsesCopy) UnregisterHotKey(Handle,HOT_CAPTURE); try { if (!ReleaseModifiers()) return false; if (!SendKey(0x11, false)) return false; if (!SendKey(0x43, false)) { SendKey(0x11, true); return false; } if (!SendKey(0x43, true)) { SendKey(0x11, true); return false; } return SendKey(0x11, true); } finally { if(captureUsesCopy) Register(config.CaptureShortcut,HOT_CAPTURE); } }
         public bool TryReadClipboard(out string text) { text = null; try { if (Clipboard.ContainsText(TextDataFormat.UnicodeText)) { text = Clipboard.GetText(TextDataFormat.UnicodeText); return true; } } catch { } return false; }
         // Builds the whole batch as one SendInput call: Windows inserts it atomically, and the per-call cost is paid once per batch instead of once per character.
@@ -41,7 +41,8 @@ namespace Paster.Windows
         private void SendBatch(INPUT[] inputs, int count, string kind) { if (SendInputBatch((uint)count,inputs,Marshal.SizeOf(typeof(INPUT))) != (uint)count) { inputAvailable=false; throw InputError(kind); } }
         private static Win32Exception InputError(string kind) { int code=Marshal.GetLastWin32Error(); return new Win32Exception(code, "Windows rejected "+kind+" (error "+code+")"); }
         private bool SendKey(ushort key, bool release) { INPUT i=new INPUT(); i.type=1; i.ki.wVk=key; i.ki.dwFlags=release ? KEYEVENTF_KEYUP : 0; bool sent=SendInput(1,ref i,Marshal.SizeOf(typeof(INPUT))) == 1; if(!sent) inputAvailable=false; return sent; }
-        private bool ReleaseModifiers() { Stopwatch elapsed=Stopwatch.StartNew(); while (elapsed.ElapsedMilliseconds < 5000 && ModifiersDown()) Thread.Sleep(5); return !ModifiersDown(); }
+        private bool ReleaseModifiers() { WaitWhile(ModifiersDown,5000); return !ModifiersDown(); }
+        private static void WaitWhile(Func<bool> condition, int timeoutMilliseconds) { Stopwatch elapsed=Stopwatch.StartNew(); while (elapsed.ElapsedMilliseconds < timeoutMilliseconds && condition()) Thread.Sleep(5); }
         private static bool ModifiersDown() { return (GetAsyncKeyState(0x11)&0x8000)!=0 || (GetAsyncKeyState(0x12)&0x8000)!=0 || (GetAsyncKeyState(0x10)&0x8000)!=0 || (GetAsyncKeyState(0x5B)&0x8000)!=0 || (GetAsyncKeyState(0x5C)&0x8000)!=0; }
         private bool UserKeyDown() { Paster.Core.Shortcut paste=Paster.Core.Shortcut.Parse(config.PasteShortcut); for (int key = 1; key <= 0xFE; key++) { if (IsMouseButton(key) || key == (int)paste.Key || (key == 0x10 || key == 0xA0 || key == 0xA1) && (paste.Modifiers & MOD_SHIFT) != 0 || (key == 0x11 || key == 0xA2 || key == 0xA3) && (paste.Modifiers & MOD_CONTROL) != 0 || (key == 0x12 || key == 0xA4 || key == 0xA5) && (paste.Modifiers & MOD_ALT) != 0 || (key == 0x5B || key == 0x5C) && (paste.Modifiers & MOD_WIN) != 0) continue; if ((GetAsyncKeyState(key) & 0x8000) != 0) return true; } return false; }
         private static bool IsMouseButton(int key) { return key==0x01 || key==0x02 || key==0x04 || key==0x05 || key==0x06; }
@@ -63,6 +64,32 @@ namespace Paster.Windows
         private void TrackRemoteCopy(int vk, uint mods) { if ((mods==MOD_CONTROL && (vk==0x43 || vk==0x58 || vk==0x2D) || mods==MOD_SHIFT && vk==0x2E) && IsTypeOnPasteTarget()) typeClipboardOnPaste=false; }
         // Clipboard changes made while a listed app is in front come from the remote session (redirection) and paste natively; local text changes are typed.
         private void OnClipboardUpdate() { typeClipboardOnPaste=IsClipboardFormatAvailable(CF_UNICODETEXT) && !IsTypeOnPasteTarget(); }
+        // Runs on the transfer worker. The dialog is topmost and forced to the foreground (the paste keypress went to another app); it closes as
+        // Cancel on the cancel shortcut or after two minutes, so a dialog hidden behind a full-screen client cannot block Paster indefinitely.
+        // After a non-cancel answer the target is reactivated and the keys or buttons used to answer are released before typing can start.
+        public TransferChoice ConfirmTransfer(TransferPrompt prompt)
+        {
+            TransferChoice choice=TransferChoice.Cancel;
+            using (Form f=new Form())
+            {
+                f.Text="Paster"; f.FormBorderStyle=FormBorderStyle.FixedDialog; f.StartPosition=FormStartPosition.CenterScreen; f.TopMost=true; f.ShowInTaskbar=false; f.MinimizeBox=false; f.MaximizeBox=false; f.ClientSize=new System.Drawing.Size(460,150);
+                Label text=new Label(); text.Text=prompt.Message; text.Left=15; text.Top=15; text.AutoSize=true; text.MaximumSize=new System.Drawing.Size(430,0); f.Controls.Add(text);
+                Button primary=new Button(), cancel=new Button(); primary.Text=prompt.CanResume?"&Resume":"&Type"; primary.DialogResult=prompt.CanResume?DialogResult.Yes:DialogResult.OK; cancel.Text="Cancel"; cancel.DialogResult=DialogResult.Cancel;
+                Button[] buttons=prompt.CanResume ? new Button[] { primary, new Button(), cancel } : new Button[] { primary, cancel }; if (prompt.CanResume) { buttons[1].Text="&Start over"; buttons[1].DialogResult=DialogResult.OK; }
+                int buttonTop=Math.Max(110,text.PreferredHeight+30); f.ClientSize=new System.Drawing.Size(460,buttonTop+40);
+                for (int i=0; i<buttons.Length; i++) { buttons[i].Width=95; buttons[i].Top=buttonTop; buttons[i].Left=f.ClientSize.Width-15-(buttons.Length-i)*105+10; f.Controls.Add(buttons[i]); }
+                f.AcceptButton=primary; f.CancelButton=cancel; f.Shown+=delegate { ForceForeground(f.Handle); primary.Focus(); };
+                System.Windows.Forms.Timer expiry=new System.Windows.Forms.Timer(); expiry.Interval=1000; int remaining=120; expiry.Tick+=delegate { if (prompt.Cancellation.IsCancellationRequested || --remaining<=0) { expiry.Stop(); f.DialogResult=DialogResult.Cancel; } }; expiry.Start();
+                DialogResult result; try { result=f.ShowDialog(); } finally { expiry.Dispose(); } choice=result==DialogResult.Yes ? TransferChoice.Resume : result==DialogResult.OK ? TransferChoice.Start : TransferChoice.Cancel;
+            }
+            if (choice==TransferChoice.Cancel) return choice;
+            WaitWhile(AnswerKeysDown,5000);
+            ForceForeground(prompt.TargetWindow); WaitWhile(delegate { return GetForegroundWindow()!=prompt.TargetWindow; },1000);
+            MouseButtonDown(); transferKeyBaseline=physicalKeyPresses; return choice;
+        }
+        private static bool AnswerKeysDown() { int[] keys={0x01,0x02,0x04,0x0D,0x20,0x12,0x52,0x53,0x54}; for (int i=0; i<keys.Length; i++) if ((GetAsyncKeyState(keys[i])&0x8000)!=0) return true; return false; }
+        // Windows only lets the process that received the last input take the foreground; briefly sharing the foreground thread's input state lifts that.
+        private static void ForceForeground(IntPtr window) { uint ignored; uint foregroundThread=GetWindowThreadProcessId(GetForegroundWindow(),out ignored), current=GetCurrentThreadId(); bool attached=foregroundThread!=0 && foregroundThread!=current && AttachThreadInput(current,foregroundThread,true); try { SetForegroundWindow(window); BringWindowToTop(window); } finally { if (attached) AttachThreadInput(current,foregroundThread,false); } }
         private bool IsTypeOnPasteTarget() { return IsRemoteWindow(GetForegroundWindow()); }
         public bool IsRemoteWindow(IntPtr window) { return config.IsTypeOnPasteApp(ProcessPath(window),WindowTitle(window)); }
         private static string WindowTitle(IntPtr window) { StringBuilder title=new StringBuilder(512); return GetWindowText(window,title,title.Capacity)>0 ? title.ToString() : null; }
@@ -75,6 +102,7 @@ namespace Paster.Windows
         [StructLayout(LayoutKind.Sequential)] private struct INPUT { public uint type; public KEYBDINPUT ki; private uint padding1; private uint padding2; } [StructLayout(LayoutKind.Sequential)] private struct KEYBDINPUT { public ushort wVk,wScan; public uint dwFlags,time; public UIntPtr dwExtraInfo; }
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd,out uint processId); [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(uint access,bool inherit,uint processId); [DllImport("kernel32.dll", CharSet=CharSet.Unicode, EntryPoint="QueryFullProcessImageNameW")] private static extern bool QueryFullProcessImageName(IntPtr process,uint flags,StringBuilder path,ref int size); [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
         [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd,StringBuilder text,int maxCount); [DllImport("user32.dll")] private static extern bool AddClipboardFormatListener(IntPtr hWnd); [DllImport("user32.dll")] private static extern bool RemoveClipboardFormatListener(IntPtr hWnd); [DllImport("user32.dll")] private static extern bool IsClipboardFormatAvailable(uint format);
+        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd); [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint attach,uint attachTo,bool enable); [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
         [StructLayout(LayoutKind.Sequential)] private struct PROCESS_POWER_THROTTLING_STATE { public uint Version,ControlMask,StateMask; }
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess(); [DllImport("kernel32.dll")] private static extern bool SetProcessInformation(IntPtr process,int informationClass,ref PROCESS_POWER_THROTTLING_STATE information,int size); [DllImport("winmm.dll")] private static extern uint timeBeginPeriod(uint period); [DllImport("winmm.dll")] private static extern uint timeEndPeriod(uint period);
         [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public uint vkCode,scanCode,flags,time; public UIntPtr dwExtraInfo; } private delegate IntPtr LowLevelKeyboardProc(int code,IntPtr wParam,IntPtr lParam);

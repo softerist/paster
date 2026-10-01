@@ -1,61 +1,114 @@
 # Paster
 
-Paster is a Windows background utility that captures selected plain text and
-replays it as simulated keyboard input. It is intended for local applications
-and Remote Desktop clients where normal clipboard sharing is unavailable in
-the direction you need.
+Paster is a Windows background utility that replays plain text as simulated
+keyboard input. It is intended for Remote Desktop clients, including
+browser-based ones, and local applications where normal clipboard sharing is
+unavailable in the direction you need.
 
-## Core workflow
+## Quick start
 
-1. Select text in the source application and press the capture shortcut
-   (`Ctrl+Shift+C` by default).
-2. Paster waits for the activation keys to be released, sends `Ctrl+C`, and
-   accepts only fresh Unicode text from the clipboard.
-3. Focus the destination application or Remote Desktop window and press the
-   paste shortcut (`Ctrl+Shift+V` by default).
-4. Once the shortcut keys are released, Paster types the captured text into
-   that foreground window in small batches. Tabs and line breaks are emitted as
-   keyboard input, and CRLF line endings are normalized to a single Enter press.
+1. Copy text locally with the normal `Ctrl+C`.
+2. Click into the Remote Desktop window and press the normal `Ctrl+V`.
+3. Paster types the text into the remote session. Everywhere else, `Ctrl+V`
+   stays an ordinary Windows paste.
 
-Paste types whichever is newer: the explicit capture or Unicode text copied to
-the clipboard after it. If no explicit capture is available, paste uses the
-current clipboard text. Capture and transfer operations cannot overlap.
+`Ctrl+Shift+V` types the clipboard text into any application, and
+`Ctrl+Shift+X` cancels a running transfer.
+
+## Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+V` in a remote-application window | Types locally copied text instead of pasting it |
+| `Ctrl+Shift+C` | Captures the current selection (sends `Ctrl+C` and keeps the text) |
+| `Ctrl+Shift+V` | Types the newest text into the foreground window, in any application |
+| `Ctrl+Shift+X` | Cancels a running transfer |
+
+Shortcut keys can be pressed in any order: the action fires on whichever key
+completes the combination, so pressing `C` slightly before `Shift` still works.
+The modifiers must match exactly, so `Ctrl+Alt+Shift+C` does not trigger
+`Ctrl+Shift+C`. Pressing a paste shortcut while text is being typed stops the
+transfer instead of starting it again.
+
+## How typing works
+
+Paster waits until the shortcut keys are physically released, then types into
+the foreground window. Typing while the keys are still held would let held or
+auto-repeating modifiers turn the typed text into application shortcuts.
+
+Paste types whichever is newer: the explicit `Ctrl+Shift+C` capture or Unicode
+text copied to the clipboard after it. If the clipboard has since changed to
+something other than text, the capture is kept. Capture and transfer operations
+cannot overlap.
+
+Text is sent in small batches, each as one atomic `SendInput` call:
+
+- Characters that need no modifier on the active keyboard layout (lowercase
+  letters, digits, space) are sent as virtual keys; Tab and line breaks are
+  sent as the Tab and Enter keys, and CRLF line endings become a single Enter
+  press.
+- Everything else (uppercase letters, shifted symbols, AltGr and non-layout
+  characters) is sent as Unicode input. Paster never presses Shift, Ctrl, or
+  Alt while typing, so rapid typing cannot trigger the Sticky Keys prompt or
+  application shortcuts, locally or on the remote host.
+- Paster requests a 1 ms system timer while typing and opts out of Windows 11
+  power throttling, so short batch delays are honored even though it has no
+  visible window.
 
 ## Ctrl+V in Remote Desktop
 
-Pressing the normal Windows `Ctrl+V` while a listed application is the
+Pressing the normal Windows `Ctrl+V` while a listed remote application is the
 foreground window types the clipboard text instead of pasting it, as long as
-that text was copied locally. Plain `Ctrl+C` locally and `Ctrl+V` in the Remote
-Desktop window is enough; `Ctrl+V` everywhere else remains an ordinary Windows
-paste.
+that text was copied locally.
 
 The default list covers the Remote Desktop clients `mstsc.exe` and `msrdc.exe`
 and the browser-based Windows Cloud client in Edge or Chrome. Entries are
-comma-separated process names; add `:text` to require the window title to
-contain that text (for example `msedge.exe:Windows Cloud`), so other browser
-tabs keep their normal paste. Edit the list in the settings dialog; an empty
-list disables the feature.
+comma-separated process names (`.exe` is optional); add `:text` to require the
+window title to contain that text (for example `msedge.exe:Windows Cloud`), so
+other browser tabs keep their normal paste. Edit the list in the settings
+dialog; changes apply immediately, and an empty list disables the feature.
 
 `Ctrl+V` in a listed application stays a native paste when:
 
-- the clipboard holds no text (files or images pass through to the session),
+- the clipboard holds no text (files and images pass through to the session),
 - you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
   `Ctrl+Insert`, or `Shift+Delete`) since the last local copy, or
 - the clipboard last changed while the remote session was in front, which is
   how redirected remote copies arrive.
 
 Copy locally again to switch back to typing, or use `Ctrl+Shift+V` to type
-regardless. Pressing a paste shortcut while text is being typed stops the
-transfer.
+regardless.
 
-Limitations: Paster cannot tell whether a native paste succeeded, so the choice
-is made by destination application and clipboard origin, not by trying a paste
-first. A copy made inside the remote session with the mouse (context menu) is
-not detected; use `Ctrl+C` there or copy locally. Copying from the remote
-session to the local machine is not possible when clipboard redirection is
-blocked, because the copied text stays on the remote clipboard. A full-screen
-Remote Desktop session that forwards Windows key combinations to the remote
-computer may receive `Ctrl+V` before Paster can intercept it.
+Listed applications are also typed at the remote speed (500 characters per
+second by default). Remote clients accept keystrokes far faster than they can
+deliver them, and keystrokes already queued in the client or the remote session
+cannot be cancelled; pacing keeps that queue small so interruption stays
+immediate. If text keeps appearing after you interrupt a transfer, lower the
+remote speed; if interruption is immediate, you can raise it.
+
+To find the fastest speed your session keeps up with:
+
+1. Copy a long text locally (about 20,000 characters).
+2. Paste it into a remote editor, and click once while it is typing.
+3. If typing stops immediately, raise the remote speed in the settings dialog
+   (for example 500, 1,000, 2,000) and repeat. If text keeps appearing after
+   the click, the session is slower than the setting: go back to the last
+   speed that stopped immediately.
+
+Limitations:
+
+- Paster cannot tell whether a native paste succeeded, so the choice is made by
+  destination application and clipboard origin, not by trying a paste first.
+- A copy made inside the remote session with the mouse (context menu) is not
+  detected; use `Ctrl+C` there or copy locally.
+- Copying from the remote session to the local machine is not possible when
+  clipboard redirection is blocked, because the copied text stays on the remote
+  clipboard.
+- A full-screen session that forwards Windows key combinations to the remote
+  computer (or a browser in full screen that locks the keyboard) may receive
+  keys before Paster sees them. In `mstsc`, set "Apply Windows key
+  combinations" to "On this computer" if `Ctrl+V` or key interruption stops
+  working in full screen.
 
 ## Transfer safety and interruption
 
@@ -63,38 +116,50 @@ The destination is the local foreground window at the moment transfer starts.
 Paster stops the transfer when any of the following occurs:
 
 - The cancel shortcut (`Ctrl+Shift+X` by default) is pressed.
-- A physical keyboard key or mouse button is pressed.
+- A physical keyboard key or mouse button is pressed. Paster's own simulated
+  keystrokes are never mistaken for user input.
 - The local foreground window changes.
 - Windows rejects simulated input.
 - The application exits.
 
-An interrupted or failed transfer keeps the valid captured text in memory so
-you can focus the destination and retry. A failed capture clears the previous
-capture to prevent stale text from being transferred. Input failures also use
-best-effort key release so partially injected modifier keys are not left down.
+An interrupted or failed transfer keeps the valid captured text in memory and
+remembers how many characters were typed. Pasting the same text again asks
+whether to **Resume** from that point, **Start over**, or cancel; pasting
+different text, a completed transfer, or `--clear` discards the resume point.
+Characters already sent before an interruption are counted as typed, because
+input that has left Paster cannot be recalled. A failed capture clears the
+previous capture to prevent stale text from being transferred.
 
-## Remote Desktop behavior
+Transfers estimated to take longer than 30 seconds (configurable; remote windows
+use the remote speed for the estimate) ask for confirmation first, showing the
+character count and expected duration. Choosing **Type** or **Resume** returns
+focus to the destination window and waits for the answering key or mouse
+button to be released before typing starts.
 
-Paster works with a Remote Desktop Connection window while that window remains
-the local foreground window and the client accepts simulated keyboard input.
-You can change focus between applications inside the remote desktop because
-Paster can only observe the local RDP window, not the remote window hierarchy.
-
-Minimizing the RDP client or switching to another local application changes the
-local foreground window and stops the transfer. Paster cannot reliably type
-into an unfocused or minimized RDP window: Windows `SendInput` targets the
-active input session rather than a particular background window.
+Paster works with a Remote Desktop window while that window remains the local
+foreground window and the client accepts simulated keyboard input. You can
+change focus between applications inside the remote desktop because Paster can
+only observe the local client window, not the remote window hierarchy.
+Minimizing the client or switching to another local application stops the
+transfer: Windows `SendInput` targets the active input session rather than a
+particular background window.
 
 ## Safety and privacy
 
-Paster has no network access, telemetry, captured-text log, or persistent
-clipboard history. Captured text is held only in memory and is discarded when
-the process exits. Operational status never displays captured text.
+Paster has no network access, telemetry, captured-text log, keystroke log, or
+persistent clipboard history. Captured text is held only in memory and is
+discarded when the process exits. Operational status never displays captured
+text.
 
-Paster runs without elevation and uses Windows global hotkeys, the clipboard,
-the `SendInput` API, a per-user named mutex, and a local management pipe. It
-cannot confirm that a destination—especially a remote application—accepted
-every simulated key.
+Paster runs without elevation and uses Windows global hotkeys, a low-level
+keyboard hook, a clipboard-change listener, the `SendInput` API, a per-user
+named mutex, and a local management pipe. The keyboard hook only checks for
+Paster's shortcuts, copy keys pressed in a remote window, and user
+interruptions; it does not record keystrokes. To recognize remote applications,
+Paster reads the foreground window's process name and title, but only when a
+paste or copy shortcut is pressed, a transfer starts, or the clipboard changes. It cannot confirm
+that a destination, especially a remote application, accepted every simulated
+key.
 
 ## Build and test
 
@@ -124,37 +189,32 @@ Every setup run builds the current source, gracefully stops any running Paster
 instance (forcing termination only if it does not exit), replaces the installed
 executable, and starts that newly built version.
 
-## Default configuration
+## Configuration
 
-- Capture shortcut: `Ctrl+Shift+C`
-- Paste/type shortcut: `Ctrl+Shift+V`
-- Cancel shortcut: `Ctrl+Shift+X`
-- Start delay: 0 ms
-- Characters per batch: 32
-- Delay per batch: 2 ms
-- Remote speed: 500 characters per second
-- Clipboard timeout: 2,000 ms
-- Maximum text: 1,048,576 UTF-16 characters
+| Setting | Default | Range |
+| --- | --- | --- |
+| Capture shortcut | `Ctrl+Shift+C` | |
+| Paste shortcut | `Ctrl+Shift+V` | |
+| Cancel shortcut | `Ctrl+Shift+X` | |
+| Start delay | 0 ms | 0-60,000 ms |
+| Delay per batch | 2 ms | 0-60,000 ms |
+| Characters per batch | 32 | 1-4,096 |
+| Clipboard timeout | 2,000 ms | 100-120,000 ms |
+| Maximum text | 16,777,216 UTF-16 characters | 1-268,435,456 |
+| Confirm pastes over | 30 s | 0 (never)-86,400 s |
+| Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | |
+| Remote speed | 500 characters per second | 0 (unlimited)-100,000 |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
-`Ctrl`, `Alt`, `Shift`, and `Win`. Characters per batch is constrained to
-1-4,096 and the delay per batch to 0-60,000 ms; the settings dialog validates
-all configured ranges before saving.
-Each batch is sent as one atomic `SendInput` call, and Paster requests a 1 ms
-system timer while typing so short delays are honored. If a destination drops
-characters, lower the batch size or raise the delay.
+`Ctrl`, `Alt`, `Shift`, and `Win`. If a local destination drops characters,
+lower the batch size or raise the delay per batch.
 
-Windows on the remote-application list (see "Ctrl+V in Remote Desktop") are
-typed at the remote speed instead (0-100,000 characters per second; 0 removes
-the limit). Remote clients accept keystrokes much faster than they can deliver
-them, and keystrokes already queued in the client or the remote session cannot
-be cancelled. If text keeps appearing after you interrupt a transfer, lower the
-remote speed; if interruption is immediate, you can raise it.
-
-Settings are stored in `%LOCALAPPDATA%\Paster\settings.json`. Delay and size
-changes apply to subsequent operations in the running process. Restart Paster
-after changing shortcuts so the global hotkeys can be re-registered.
+Open the settings dialog with `--settings`; it validates all values before
+saving. Settings are stored in `%LOCALAPPDATA%\Paster\settings.json`; settings
+missing from an older file load with their defaults. Delay, speed, size, and
+application-list changes apply to subsequent operations in the running process.
+Restart Paster after changing shortcuts so they can be re-registered.
 
 ## Management commands
 
@@ -170,8 +230,9 @@ Run the installed executable with one of these explicit commands:
 ```
 
 `--status` reports whether a capture exists, whether transfer is active,
-whether Windows input remains available, the current target-window handle, and
-the latest error. `--clear` removes only the in-memory capture.
+whether Windows input remains available, the current target-window handle, the
+resume point of an interrupted transfer, and the latest error. `--clear`
+removes the in-memory capture and resume point.
 
 ## Remove
 
@@ -186,18 +247,23 @@ directory. It does not remove unrelated user files.
 ## Current limitations
 
 - Windows 10/11 interactive user sessions are the supported environment.
-- Characters typed without modifiers on the active keyboard layout are sent as
-  virtual keys; everything else (uppercase letters, shifted symbols, AltGr and
-  non-layout characters) is sent as Unicode input so Paster never presses Shift,
-  Ctrl, or Alt. Unicode `SendInput` handling depends on the destination
-  application.
+- Unicode `SendInput` handling depends on the destination application; a few
+  older console programs and games ignore Unicode input.
 - Clipboard ownership and Windows permission policy can prevent capture or
   simulated input.
-- Local foreground monitoring cannot detect focus changes inside an RDP window.
+- Local foreground monitoring cannot detect focus changes inside a remote
+  session.
+- Very large texts are practical only locally: at the default remote speed,
+  16 million characters take about 9 hours. For bulk data, use file transfer
+  or drive redirection instead.
 - Simulated typing preserves plain-text structure where supported, but does not
-  guarantee identical bytes, encoding, or newline conventions.
+  guarantee identical bytes, encoding, or newline conventions. Editors that
+  auto-indent or auto-close brackets may alter typed code.
 
 Core tests cover structured text, tabs, blank lines, punctuation, Unicode,
-size limits, stale-capture clearing, interruption and cancellation, foreground
-changes, shortcut validation, capture preservation, and overlapping-operation
-prevention. Windows integration still depends on the live desktop environment.
+batching and line-ending normalization, surrogate pairs, size limits, settings
+validation and migration, stale-capture clearing, newest-text selection,
+interruption and cancellation, foreground changes, shortcut validation,
+remote-application matching, remote pacing, resume points, confirmation
+prompts, capture preservation, and overlapping-operation prevention. Windows integration (hotkeys, the keyboard
+hook, and input injection) still depends on the live desktop environment.
