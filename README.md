@@ -72,14 +72,9 @@ dialog; changes apply immediately, and an empty list disables the feature.
 
 - the clipboard holds no text (files and images pass through to the session),
 - you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
-  `Ctrl+Insert`, or `Shift+Delete`) since the last local copy. Clipboard
-  changes in the following five seconds count as that remote copy arriving
-  through redirection.
-
-Any other clipboard change with text switches `Ctrl+V` back to typing, no
-matter which window was in front: clicking into a remote window can make the
-source application or the client touch the clipboard again with the same text.
-`--status` shows the current `Ctrl+V` mode and why.
+  `Ctrl+Insert`, or `Shift+Delete`) since the last local copy, or
+- the clipboard last changed while the remote session was in front, which is
+  how redirected remote copies arrive.
 
 Copy locally again to switch back to typing, or use `Ctrl+Shift+V` to type
 regardless.
@@ -105,9 +100,7 @@ Limitations:
 - Paster cannot tell whether a native paste succeeded, so the choice is made by
   destination application and clipboard origin, not by trying a paste first.
 - A copy made inside the remote session with the mouse (context menu) is not
-  detected. With clipboard redirection on, the copied text is typed instead of
-  pasted (same text, just slower); with redirection blocked, `Ctrl+V` types the
-  last local text. Use `Ctrl+C` there to get a native paste.
+  detected; use `Ctrl+C` there or copy locally.
 - Copying from the remote session to the local machine is not possible when
   clipboard redirection is blocked, because the copied text stays on the remote
   clipboard.
