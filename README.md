@@ -68,23 +68,23 @@ window title to contain that text (for example `msedge.exe:Windows Cloud`), so
 other browser tabs keep their normal paste. Edit the list in the settings
 dialog; changes apply immediately, and an empty list disables the feature.
 
+Text copied inside the remote session is typed too, once it reaches the local
+clipboard (the browser client shares it; this is on by default as "Type text
+copied inside remote windows"). Paster cannot see which window inside a session
+has focus, so this is what makes `Ctrl+V` work in an `mstsc` session opened
+inside the browser session, where paste is blocked. The cost is that pasting
+inside the session itself is typed rather than pasted.
+
 `Ctrl+V` in a listed application stays a native paste when:
 
 - the clipboard holds no text (files and images pass through to the session),
 - you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
-  `Ctrl+Insert`, or `Shift+Delete`) since the last local copy, or
-- the clipboard last changed while the remote session was in front, which is
-  how redirected remote copies arrive.
+  `Ctrl+Insert`, or `Shift+Delete`) and the copy has not reached the local
+  clipboard, which is the case when clipboard redirection is blocked, or
+- the clipboard last changed while the remote session was in front and "Type
+  text copied inside remote windows" is turned off.
 
-Copy locally again to switch back to typing, or use `Ctrl+Shift+V` to type
-regardless.
-
-If a native paste does nothing, for example in an `mstsc` session opened inside
-the browser session that blocks paste, press `Ctrl+V` again within a second:
-the second press types the clipboard text instead. This works only when text
-copied inside the remote session reached the local clipboard (the browser
-client shares it); otherwise the second press stays a native paste, so older
-local text is never typed by mistake.
+Use `Ctrl+Shift+V` to type regardless.
 
 Listed applications are also typed at the remote speed (500 characters per
 second by default). Remote clients accept keystrokes far faster than they can
@@ -245,6 +245,7 @@ executable, and starts that newly built version.
 | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | |
 | Remote speed | 500 characters per second | 0 (unlimited)-100,000 |
 | Use code mode for Ctrl+V into remote windows | On | On or off |
+| Type text copied inside remote windows | On | On or off |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
