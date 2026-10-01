@@ -49,32 +49,33 @@ namespace Paster.Core
             // Remote clients consume input far slower than SendInput accepts it; anything sent ahead of them queues up where cancellation
             // can no longer reach it. Pacing remote targets in ~10 ms batches keeps that backlog small so interruption stays immediate.
             bool remote = platform.IsRemoteWindow(target); int rate = remote ? config.RemoteCharactersPerSecond : 0; int batchSize = rate > 0 ? Math.Max(1, Math.Min(config.CharactersPerBatch, rate / 100)) : config.CharactersPerBatch; Stopwatch paced = Stopwatch.StartNew();
+            // Only large texts (more lines than the threshold) are confirmed and can be resumed; shorter ones always type from the start.
+            int lines = CountLines(text); bool large = config.ConfirmAboveLines > 0 && lines > config.ConfirmAboveLines;
             int offset = 0, sent = 0;
             try
             {
-                offset = ChooseStart(text, target, remote, rate, batchSize, token); if (offset < 0) { Fail("Transfer cancelled.", false); return false; } sent = offset;
+                offset = ChooseStart(text, lines, large, target, remote, rate, batchSize, token); if (offset < 0) { Fail("Transfer cancelled.", false); return false; } sent = offset;
                 clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; if (!platform.SendText(text.Substring(i, length))) throw new InvalidOperationException("Windows input rejected a text batch."); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, (long)(i - offset) * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
                 lock (gate) { resumeText = null; resumeOffset = 0; } return true;
             }
-            catch (OperationCanceledException) { SaveResumePoint(text, sent); Fail("Transfer cancelled.", false); return false; } catch (Exception ex) { SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
+            catch (OperationCanceledException) { if (large) SaveResumePoint(text, sent); Fail("Transfer cancelled.", false); return false; } catch (Exception ex) { if (large) SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
         }
-        // Returns the offset to start typing from, or -1 when the user declines. Long transfers and transfers of the text that was
-        // interrupted last ask first; the platform returns focus to the target before typing begins.
-        private int ChooseStart(string text, IntPtr target, bool remote, int rate, int batchSize, CancellationToken token)
+        // Returns the offset to start typing from, or -1 when the user declines. Large texts ask first, offering Resume when the same text
+        // was interrupted earlier; the platform returns focus to the target before typing begins.
+        private int ChooseStart(string text, int lines, bool large, IntPtr target, bool remote, int rate, int batchSize, CancellationToken token)
         {
             // Pasting different text discards the resume point. The comparison (up to the full text) runs outside the lock so Status never waits on it.
             string previous; int previousOffset; lock (gate) { previous = resumeText; previousOffset = resumeOffset; }
-            int resumeAt = previous != null && previousOffset < text.Length && String.Equals(previous, text) ? previousOffset : 0;
+            int resumeAt = large && previous != null && previousOffset < text.Length && String.Equals(previous, text) ? previousOffset : 0;
             if (resumeAt == 0 && previous != null) lock (gate) { if (Object.ReferenceEquals(resumeText, previous)) { resumeText = null; resumeOffset = 0; } }
+            if (!large) return 0;
             // Throughput is capped both by the remote rate and by the batch delay floor.
             double perSecond = batchSize * 1000.0 / Math.Max(1, config.CharacterDelayMilliseconds); if (rate > 0) perSecond = Math.Min(perSecond, rate);
             TimeSpan full = TimeSpan.FromSeconds(text.Length / perSecond), rest = TimeSpan.FromSeconds((text.Length - resumeAt) / perSecond);
-            bool warn = config.ConfirmAboveSeconds > 0 && full.TotalSeconds > config.ConfirmAboveSeconds;
-            if (resumeAt == 0 && !warn) return 0;
             string where = remote ? "the remote session" : "this window", nl = Environment.NewLine;
             string message = resumeAt > 0
                 ? String.Format("Typing into {0} stopped after {1:N0} of {2:N0} characters ({3}%).{7}{7}Resume types the remaining {4:N0} characters ({5}). Start over types all of them again ({6}).", where, resumeAt, text.Length, (long)resumeAt * 100 / text.Length, text.Length - resumeAt, TransferPrompt.Describe(rest), TransferPrompt.Describe(full), nl)
-                : String.Format("Type {0:N0} characters into {1}?{4}{4}This takes {2}{3}. Press any key or click to stop; you can resume later.", text.Length, where, TransferPrompt.Describe(full), rate > 0 ? String.Format(" at {0:N0} characters per second", rate) : "", nl);
+                : String.Format("Type {5:N0} lines ({0:N0} characters) into {1}?{4}{4}This takes {2}{3}. Press any key or click to stop; you can resume later.", text.Length, where, TransferPrompt.Describe(full), rate > 0 ? String.Format(" at {0:N0} characters per second", rate) : "", nl, lines);
             TransferChoice choice = platform.ConfirmTransfer(new TransferPrompt { TargetWindow = target, ResumeOffset = resumeAt, Message = message, Cancellation = token });
             token.ThrowIfCancellationRequested();
             if (choice == TransferChoice.Cancel) return -1;
@@ -82,6 +83,7 @@ namespace Paster.Core
             if (choice == TransferChoice.Resume && resumeAt > 0) return resumeAt;
             lock (gate) { resumeText = null; resumeOffset = 0; } return 0;
         }
+        private static int CountLines(string text) { int lines = 1; for (int i = 0; i < text.Length; i++) if (text[i] == '\n') lines++; return lines; }
         private void SaveResumePoint(string text, int sent) { lock (gate) { if (sent > 0 && sent < text.Length) { resumeText = text; resumeOffset = sent; } } }
         public void Cancel() { lock (gate) { if (cancellation != null) cancellation.Cancel(); } }
         public void ReportError(string error) { lock (gate) { lastError = error; } }

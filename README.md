@@ -122,19 +122,27 @@ Paster stops the transfer when any of the following occurs:
 - Windows rejects simulated input.
 - The application exits.
 
-An interrupted or failed transfer keeps the valid captured text in memory and
-remembers how many characters were typed. Pasting the same text again asks
-whether to **Resume** from that point, **Start over**, or cancel; pasting
-different text, a completed transfer, or `--clear` discards the resume point.
-Characters already sent before an interruption are counted as typed, because
-input that has left Paster cannot be recalled. A failed capture clears the
-previous capture to prevent stale text from being transferred.
+An interrupted or failed transfer keeps the valid captured text in memory. A
+failed capture clears the previous capture to prevent stale text from being
+transferred.
 
-Transfers estimated to take longer than 30 seconds (configurable; remote windows
-use the remote speed for the estimate) ask for confirmation first, showing the
-character count and expected duration. Choosing **Type** or **Resume** returns
-focus to the destination window and waits for the answering key or mouse
-button to be released before typing starts.
+Texts with more than 2,000 lines (configurable; 0 turns it off) are handled as
+large transfers. Shorter texts are never interrupted by a prompt and always type
+from the start.
+
+- Before typing, a large transfer asks for confirmation, showing the line and
+  character counts and the expected duration (remote windows use the remote
+  speed for the estimate).
+- If a large transfer is interrupted, Paster remembers how many characters were
+  typed. Pasting the same text again asks whether to **Resume** from that
+  point, **Start over**, or cancel. Pasting different text, a completed
+  transfer, or `--clear` discards the resume point. Characters already sent
+  before an interruption count as typed, because input that has left Paster
+  cannot be recalled.
+- Choosing **Type** or **Resume** returns focus to the destination window and
+  waits for the answering key or mouse button to be released before typing
+  starts. The cancel shortcut closes the prompt, and an unanswered prompt
+  cancels itself after two minutes.
 
 Paster works with a Remote Desktop window while that window remains the local
 foreground window and the client accepts simulated keyboard input. You can
@@ -201,7 +209,7 @@ executable, and starts that newly built version.
 | Characters per batch | 32 | 1-4,096 |
 | Clipboard timeout | 2,000 ms | 100-120,000 ms |
 | Maximum text | 16,777,216 UTF-16 characters | 1-268,435,456 |
-| Confirm pastes over | 30 s | 0 (never)-86,400 s |
+| Confirm pastes over | 2,000 lines | 0 (never)-100,000,000 lines |
 | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | |
 | Remote speed | 500 characters per second | 0 (unlimited)-100,000 |
 
