@@ -105,7 +105,7 @@ namespace Paster.Windows
         public static bool TrySend(string arg, string ignored) { string command=arg.TrimStart('-').Replace("-", "-"); try { using(NamedPipeClientStream p=new NamedPipeClientStream(".",PipeName,PipeDirection.Out)) { p.Connect(300); using(StreamWriter w=new StreamWriter(p)) { w.AutoFlush=true; w.WriteLine(command); } } return true; } catch { return false; } }
         public static void SetAutostart(bool enabled) { using(RegistryKey k=Registry.CurrentUser.CreateSubKey(RunKey)) { if(enabled) k.SetValue("Paster", "\""+Application.ExecutablePath+"\" --background"); else k.DeleteValue("Paster", false); } }
         public static bool IsAutostartEnabled() { using(RegistryKey k=Registry.CurrentUser.OpenSubKey(RunKey)) return k!=null && k.GetValue("Paster")!=null; }
-        public static void ShowStatus(TransferCoordinator c) { TransferStatus s=c.Status; MessageBox.Show("Running\r\nCaptured text: "+(s.HasCapture?"yes":"no")+"\r\nTransfer active: "+(s.IsTransferring?"yes":"no")+"\r\nLast input accepted: "+(s.IsInputAvailable?"yes":"no")+"\r\nTarget window: "+(s.TargetWindow==IntPtr.Zero?"none":s.TargetWindow.ToString())+"\r\nResume point: "+(s.ResumeOffset==0?"none":String.Format("{0:N0} of {1:N0} characters",s.ResumeOffset,s.ResumeTotal))+"\r\nLast error: "+(s.LastError??"none"),"Paster status"); }
+        public static void ShowStatus(TransferCoordinator c, string extra) { TransferStatus s=c.Status; MessageBox.Show("Running\r\nCaptured text: "+(s.HasCapture?"yes":"no")+"\r\nTransfer active: "+(s.IsTransferring?"yes":"no")+"\r\nLast input accepted: "+(s.IsInputAvailable?"yes":"no")+"\r\nTarget window: "+(s.TargetWindow==IntPtr.Zero?"none":s.TargetWindow.ToString())+"\r\nResume point: "+(s.ResumeOffset==0?"none":String.Format("{0:N0} of {1:N0} characters",s.ResumeOffset,s.ResumeTotal))+"\r\nLast error: "+(s.LastError??"none")+(extra!=null ? "\r\n"+extra : ""),"Paster status"); }
 
         private sealed class Field { public string Label, Member; public Control Control; public TabPage Page; public Action<PasterConfig> Apply; }
         private static Form openSettings;
@@ -141,6 +141,7 @@ namespace Paster.Windows
                 t=AddPage(tabs,"Remote windows");
                 AddCheck(fields,t,"Type on Ctrl+V in listed apps","TypeOnCtrlV",c.TypeOnCtrlV,(x,v)=>x.TypeOnCtrlV=v);
                 AddText(fields,t,"Type on Ctrl+V in apps","TypeOnPasteApps",c.TypeOnPasteApps,(x,v)=>x.TypeOnPasteApps=v);
+                AddText(fields,t,"Paste normally first in apps","PasteFirstApps",c.PasteFirstApps,(x,v)=>x.PasteFirstApps=v);
                 AddCheck(fields,t,"Type text copied inside remote windows","TypeRemoteCopies",c.TypeRemoteCopies,(x,v)=>x.TypeRemoteCopies=v);
                 AddNumber(fields,t,"Remote speed (keys/s, 0=max)","RemoteCharactersPerSecond",c.RemoteCharactersPerSecond,(x,v)=>x.RemoteCharactersPerSecond=v);
                 AddNumber(fields,t,"Pause after Enter and Tab (ms)","RemoteKeyPauseMilliseconds",c.RemoteKeyPauseMilliseconds,(x,v)=>x.RemoteKeyPauseMilliseconds=v);

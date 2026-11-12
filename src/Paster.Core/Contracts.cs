@@ -101,4 +101,34 @@ namespace Paster.Core
             return "about " + hours + (hours == 1 ? " hour" : " hours") + (rest > 0 ? " " + rest + (rest == 1 ? " minute" : " minutes") : "");
         }
     }
+
+    // Whether a normal paste reached the session behind a window that pastes normally first.
+    public enum PasteCheck { Unknown, Works, Blocked }
+    // Text: plain text only, which Paster can republish without losing anything, to watch the paste. Other: content with further formats
+    // (HTML, rich text, images, Office or editor data), which republishing the text alone would drop, so Paster leaves it untouched.
+    // Private: the source asked clipboard tools to keep no copy (password managers), so it is never republished or pasted through clipboard
+    // sharing; it is typed.
+    public enum ClipboardKind { Text, Other, Private }
+    public enum PasteAction { Type, TryNormalPaste, PasteNormally }
+    // Remembers per remote window whether a normal paste reached its session, and decides what Ctrl+V does there. Blocked is final for the
+    // window: typing always works, and another attempt could paste the session's old clipboard again. Works is checked again with every
+    // paste of text, because the focus inside a remote session can move to a nested session that blocks clipboard sharing.
+    public sealed class PasteFirstMemory
+    {
+        private readonly Dictionary<IntPtr, PasteCheck> checks = new Dictionary<IntPtr, PasteCheck>(); private readonly object gate = new object();
+        public static PasteAction Decide(PasteCheck check, ClipboardKind kind)
+        {
+            if (kind == ClipboardKind.Private || check == PasteCheck.Blocked) return PasteAction.Type;
+            if (kind == ClipboardKind.Text) return PasteAction.TryNormalPaste;
+            // Content that cannot be watched is pasted normally only where a normal paste has already been seen to work.
+            return check == PasteCheck.Works ? PasteAction.PasteNormally : PasteAction.Type;
+        }
+        // The session's own clipboard may already have been pasted when Paster notices, and only the user can see whether it was.
+        public static string BlockedMessage(string program) { return "Normal paste didn't reach " + (program ?? "this window") + ": clipboard sharing is blocked there, so Ctrl+V types into it from now on. If something else was pasted, undo it (Ctrl+Z) and press Ctrl+V again."; }
+        // isAlive drops windows that were closed, so a window handle reused by a new window starts unchecked.
+        public PasteCheck Get(IntPtr window, Func<IntPtr, bool> isAlive) { lock (gate) { PasteCheck check; if (!checks.TryGetValue(window, out check)) return PasteCheck.Unknown; if (isAlive(window)) return check; checks.Remove(window); return PasteCheck.Unknown; } }
+        public void Set(IntPtr window, PasteCheck check, Func<IntPtr, bool> isAlive) { lock (gate) { List<IntPtr> closed = new List<IntPtr>(); foreach (IntPtr known in checks.Keys) if (!isAlive(known)) closed.Add(known); foreach (IntPtr gone in closed) checks.Remove(gone); checks[window] = check; } }
+        public int Count(PasteCheck check) { lock (gate) { int count = 0; foreach (PasteCheck known in checks.Values) if (known == check) count++; return count; } }
+        public void Clear() { lock (gate) { checks.Clear(); } }
+    }
 }

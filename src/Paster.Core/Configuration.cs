@@ -43,6 +43,9 @@ namespace Paster.Core
         // Remote windows get characters as Unicode but Enter, Tab, and code mode's keys as keys; a remote client inside a remote session
         // delivered those keys up to about 60 ms after the characters that followed them. Characters after keys wait this long.
         [DataMember(Name="remoteKeyPauseMilliseconds", Order=26)] public int RemoteKeyPauseMilliseconds = 150;
+        // Apps whose Ctrl+V tries the session's own paste first and types only where clipboard sharing is blocked. Empty by default: a nested
+        // session inside such an app can block paste where the app's own session allows it, which Paster cannot see.
+        [DataMember(Name="pasteFirstApps", Order=27)] public string PasteFirstApps = "";
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
 
@@ -69,11 +72,18 @@ namespace Paster.Core
 
         // Entries are process names (".exe" optional), optionally followed by ":" and text the window title must contain,
         // so a browser-based Remote Desktop client can be matched without capturing Ctrl+V in every browser tab.
-        public bool IsTypeOnPasteApp(string processPath, string windowTitle)
+        // Apps that paste normally first are remote windows too: where their paste is blocked, Paster types into them the same way.
+        public bool IsTypeOnPasteApp(string processPath, string windowTitle) { return MatchesApp(TypeOnPasteApps, processPath, windowTitle) || MatchesApp(PasteFirstApps, processPath, windowTitle); }
+        // Browser-based clients read the clipboard as soon as Ctrl+V is pressed, whether or not the session (or one nested in it) accepts
+        // the text, so a read proves nothing there: they always type, even when listed.
+        public bool IsPasteFirstApp(string processPath, string windowTitle) { return !IsBrowser(processPath) && MatchesApp(PasteFirstApps, processPath, windowTitle); }
+        private static readonly string[] Browsers = { "msedge", "chrome", "firefox", "brave", "opera", "vivaldi", "iexplore" };
+        private static bool IsBrowser(string processPath) { if (String.IsNullOrEmpty(processPath)) return false; string name = StripExe(Path.GetFileName(processPath)); for (int i = 0; i < Browsers.Length; i++) if (Browsers[i].Equals(name, StringComparison.OrdinalIgnoreCase)) return true; return false; }
+        private static bool MatchesApp(string list, string processPath, string windowTitle)
         {
-            if (String.IsNullOrEmpty(processPath) || String.IsNullOrEmpty(TypeOnPasteApps)) return false;
+            if (String.IsNullOrEmpty(processPath) || String.IsNullOrEmpty(list)) return false;
             string name = StripExe(Path.GetFileName(processPath));
-            string[] entries = TypeOnPasteApps.Split(',', ';');
+            string[] entries = list.Split(',', ';');
             for (int i = 0; i < entries.Length; i++)
             {
                 string entry = entries[i].Trim(), title = null; int colon = entry.IndexOf(':'); if (colon >= 0) { title = entry.Substring(colon + 1).Trim(); entry = entry.Substring(0, colon).Trim(); }

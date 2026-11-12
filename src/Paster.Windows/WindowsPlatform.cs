@@ -18,7 +18,9 @@ namespace Paster.Windows
         private const int LLMHF_INJECTED=1; private readonly LowLevelKeyboardProc mouseProc; private IntPtr mouseHook; private volatile int physicalClicks; private int transferClickBaseline; private long lastPhysicalInput, inputBaseline;
         private const int WH_KEYBOARD_LL=13, WM_KEYDOWN=0x100, WM_KEYUP=0x101, WM_SYSKEYDOWN=0x104, WM_SYSKEYUP=0x105; private const uint LLKHF_INJECTED=0x10, WM_CLIPBOARDUPDATE=0x031D, CF_UNICODETEXT=13;
         private readonly Paster.Core.Shortcut[] shortcuts=new Paster.Core.Shortcut[HOT_CANCEL+1]; private readonly bool[] latched=new bool[HOT_CANCEL+1]; private readonly LowLevelKeyboardProc hookProc; private IntPtr hook; private volatile int physicalKeyPresses; private int transferKeyBaseline; private volatile bool windowsPasteHeld; private bool pasteKeyDown; private volatile bool typeClipboardOnPaste;
-        public event Action CaptureRequested; public event Action PasteRequested; public event Action CancelRequested;
+        public event Action CaptureRequested; public event Action CancelRequested;
+        // true when Ctrl+V in a listed app started the paste (it may paste normally first); false for the paste shortcut, which always types.
+        public event Action<bool> PasteRequested;
         public WindowsPlatform(PasterConfig c) { config = c; DisablePowerThrottling(); CreateHandle(new CreateParams()); ReloadShortcuts(); typeClipboardOnPaste=IsClipboardFormatAvailable(CF_UNICODETEXT); AddClipboardFormatListener(Handle); hookProc=KeyboardHook; mouseProc=MouseHook; InstallHook(); WTSRegisterSessionNotification(Handle,0); SetTimer(Handle,(UIntPtr)HOOK_TIMER,HookRefreshMilliseconds,IntPtr.Zero); }
         public string RegistrationError { get { return String.IsNullOrEmpty(hotkeyError) ? hookError : String.IsNullOrEmpty(hookError) ? hotkeyError : hotkeyError+" "+hookError; } }
         // Applies the configured shortcuts while running; every old registration is released first, so two shortcuts can swap keys.
@@ -146,7 +148,8 @@ namespace Paster.Windows
         private void TrackRemoteCopy(int vk, uint mods) { if ((mods==MOD_CONTROL && (vk==0x43 || vk==0x58 || vk==0x2D) || mods==MOD_SHIFT && vk==0x2E) && IsTypeOnPasteTarget()) typeClipboardOnPaste=false; }
         // Text copied locally is typed. Text arriving while a listed app is in front is a redirected remote copy: typed too when TypeRemoteCopies
         // is on (a nested session inside it may block paste, and Paster cannot see which window inside the session has focus), otherwise native.
-        private void OnClipboardUpdate() { typeClipboardOnPaste=IsClipboardFormatAvailable(CF_UNICODETEXT) && (config.TypeRemoteCopies || !IsTypeOnPasteTarget()); }
+        // Paster's own republished copy (paste normally first) is the same text and changes nothing.
+        private void OnClipboardUpdate() { if (GetClipboardOwner()==Handle) return; typeClipboardOnPaste=IsClipboardFormatAvailable(CF_UNICODETEXT) && (config.TypeRemoteCopies || !IsTypeOnPasteTarget()); }
         // Runs on the transfer worker. The dialog is topmost and forced to the foreground (the paste keypress went to another app); it closes as
         // Cancel on the cancel shortcut or after the prompt timeout, so a dialog hidden behind a full-screen client cannot block Paster indefinitely.
         // After a non-cancel answer the target is reactivated and the keys or buttons used to answer are released before typing can start.
@@ -179,13 +182,112 @@ namespace Paster.Windows
         // The program's own description ("Microsoft Teams", "Visual Studio Code") rather than the window title, which can contain document
         // names or message subjects that do not belong in a notification.
         public string DescribeWindow(IntPtr window) { string path=ProcessPath(window); if (path==null) return null; try { string description=FileVersionInfo.GetVersionInfo(path).FileDescription; if (!String.IsNullOrWhiteSpace(description)) return description.Trim(); } catch { } return System.IO.Path.GetFileNameWithoutExtension(path); }
+        // ---- Paste normally first ----
+        // Paster republishes the clipboard's plain text with delayed rendering: Windows then asks Paster for the text at the moment a program
+        // reads it, and a read by the remote-desktop client proves that a paste inside its session (or a session nested in it) reached here.
+        // Only plain text is ever republished, the same text Paster would otherwise type; any other clipboard content is left alone.
+        private const int WM_RENDERFORMAT=0x0305, WM_RENDERALLFORMATS=0x0306, WM_DESTROYCLIPBOARD=0x0307, WM_PUBLISH_CLIPBOARD=0x8003, NormalPasteTimeoutMilliseconds=3000, AnnounceMilliseconds=150;
+        private const uint GMEM_MOVEABLE=2, CF_TEXT=1, CF_OEMTEXT=7, CF_LOCALE=16;
+        private static readonly uint HistoryFormat=RegisterClipboardFormat("CanIncludeInClipboardHistory"), CloudFormat=RegisterClipboardFormat("CanUploadToCloudClipboard"), ExcludeFormat=RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing"), ViewerIgnoreFormat=RegisterClipboardFormat("Clipboard Viewer Ignore");
+        private string published, toPublish; private volatile int readerToWatch, lastReader; private volatile bool stopping;
+        private readonly ManualResetEvent clipboardRead=new ManualResetEvent(false), normalPasteCancelled=new ManualResetEvent(false);
+        // The process that last read text Paster republished (diagnostics).
+        public int LastClipboardReader { get { return lastReader; } }
+        public bool IsPasteFirstWindow(IntPtr window) { return !String.IsNullOrWhiteSpace(config.PasteFirstApps) && config.IsPasteFirstApp(ProcessPath(window),WindowTitle(window)); }
+        public static bool IsWindowAlive(IntPtr window) { return IsWindow(window); }
+        // Text: the clipboard holds plain text only (its three encodings, its locale, history markers), so republishing the text loses
+        // nothing. Other: HTML, rich text, images, files, or application data, which republishing the text alone would drop. Private: the
+        // source asked clipboard tools to keep no copy (password managers).
+        public ClipboardKind ReadClipboardText(out string text)
+        {
+            text=null; string own=published; if (own!=null && GetClipboardOwner()==Handle) { text=own; return ClipboardKind.Text; }
+            if (IsClipboardFormatAvailable(ExcludeFormat) || IsClipboardFormatAvailable(ViewerIgnoreFormat)) return ClipboardKind.Private;
+            if (!OpenClipboardWithRetry(IntPtr.Zero)) return ClipboardKind.Other;
+            try
+            {
+                if (IsClipboardFormatAvailable(HistoryFormat) && ReadClipboardDword(HistoryFormat)==0) return ClipboardKind.Private;
+                for (uint format=EnumClipboardFormats(0); format!=0; format=EnumClipboardFormats(format))
+                    if (format!=CF_UNICODETEXT && format!=CF_TEXT && format!=CF_OEMTEXT && format!=CF_LOCALE && format!=HistoryFormat && format!=CloudFormat) return ClipboardKind.Other;
+                IntPtr handle=GetClipboardData(CF_UNICODETEXT); if (handle==IntPtr.Zero) return ClipboardKind.Other;
+                IntPtr memory=GlobalLock(handle); if (memory==IntPtr.Zero) return ClipboardKind.Other;
+                try { string value=Marshal.PtrToStringUni(memory,(int)Math.Min((long)(GlobalSize(handle).ToUInt64()/2),int.MaxValue)); int end=value.IndexOf('\0'); text=end>=0 ? value.Substring(0,end) : value; }
+                finally { GlobalUnlock(handle); }
+                return ClipboardKind.Text;
+            }
+            finally { CloseClipboard(); }
+        }
+        // Republishes the text, sends Ctrl+V to the target, and waits for its process to read the text. Only that process counts: clipboard
+        // managers and other programs may read the clipboard too, and while the paste is watched they get nothing.
+        public NormalPasteResult TryNormalPaste(IntPtr target, string text)
+        {
+            uint pid; GetWindowThreadProcessId(target,out pid); if (pid==0 || text==null) return NormalPasteResult.NotSent;
+            normalPasteCancelled.Reset(); clipboardRead.Reset(); if (stopping) return NormalPasteResult.Cancelled;
+            // Watched from before the republish, so no other reader can take the first copy of the text.
+            readerToWatch=(int)pid;
+            try
+            {
+                if (!PublishClipboard(text)) return NormalPasteResult.NotSent;
+                // The client announces the republished text to its session; give that a moment before the paste asks for it.
+                if (normalPasteCancelled.WaitOne(AnnounceMilliseconds)) return NormalPasteResult.Cancelled;
+                if (GetForegroundWindow()!=target) return NormalPasteResult.FocusLost;
+                if (!SendPasteShortcut()) return NormalPasteResult.NotSent;
+                switch (WaitHandle.WaitAny(new WaitHandle[] { clipboardRead, normalPasteCancelled },NormalPasteTimeoutMilliseconds)) { case 0: return NormalPasteResult.Read; case 1: return NormalPasteResult.Cancelled; default: return NormalPasteResult.NotRead; }
+            }
+            finally { readerToWatch=0; }
+        }
+        // The physical Ctrl+V was swallowed; once its keys are released, a clean Ctrl+V reaches the window (Paster's hook ignores injected keys).
+        public bool SendPasteShortcut() { bool control=SendKey(0x11,false), v=control && SendKey(0x56,false); if (v) SendKey(0x56,true); if (control) SendKey(0x11,true); return v; }
+        public void CancelNormalPaste() { normalPasteCancelled.Set(); }
+        public void StopNormalPaste() { stopping=true; normalPasteCancelled.Set(); }
+        // The clipboard window lives on the window thread, which therefore owns the republished text and answers the read requests.
+        public bool PublishClipboard(string text)
+        {
+            for (int attempt=0; attempt<15; attempt++)
+            {
+                toPublish=text; IntPtr result;
+                if (SendMessageTimeout(Handle,WM_PUBLISH_CLIPBOARD,IntPtr.Zero,IntPtr.Zero,0,1000,out result)!=IntPtr.Zero && result!=IntPtr.Zero) return true;
+                Thread.Sleep(20);
+            }
+            return false;
+        }
+        // One attempt only: this runs on the window thread, which also runs the keyboard hook and must not wait for a busy clipboard.
+        private bool PublishNow(string text)
+        {
+            if (text==null || !OpenClipboard(Handle)) return false;
+            try
+            {
+                if (!EmptyClipboard()) return false;
+                published=text; // after EmptyClipboard: its WM_DESTROYCLIPBOARD (for an earlier Paster copy) has already cleared the old one
+                SetClipboardData(CF_UNICODETEXT,IntPtr.Zero);
+                // The original copy is already in the clipboard history; this republished copy should not appear there a second time.
+                SetClipboardBytes(HistoryFormat,BitConverter.GetBytes(0)); SetClipboardBytes(CloudFormat,BitConverter.GetBytes(0));
+                return true;
+            }
+            finally { CloseClipboard(); }
+        }
+        // Runs when a program reads the republished text (Windows also renders the ANSI and OEM text from it). While a normal paste is
+        // watched, only the target's own process gets the text: a clipboard manager reading first would turn it into plain data, and the
+        // target's read would go unnoticed.
+        private void RenderFormat(uint format)
+        {
+            IntPtr reader=GetOpenClipboardWindow(); uint pid=0; if (reader!=IntPtr.Zero) GetWindowThreadProcessId(reader,out pid);
+            lastReader=(int)pid; int watched=readerToWatch;
+            if (watched!=0 && pid!=(uint)watched) return;
+            string text=published; if (format==CF_UNICODETEXT && text!=null) SetClipboardBytes(CF_UNICODETEXT,Encoding.Unicode.GetBytes(text+"\0"));
+            if (watched!=0) clipboardRead.Set();
+        }
+        // Paster is closing while it still owns the clipboard: the text is rendered so it stays available.
+        private void RenderAllFormats() { string text=published; if (text==null || !OpenClipboard(Handle)) return; try { if (GetClipboardOwner()==Handle) SetClipboardBytes(CF_UNICODETEXT,Encoding.Unicode.GetBytes(text+"\0")); } finally { CloseClipboard(); } }
+        private static bool OpenClipboardWithRetry(IntPtr owner) { for (int attempt=0; attempt<25; attempt++) { if (OpenClipboard(owner)) return true; Thread.Sleep(20); } return false; }
+        private static void SetClipboardBytes(uint format, byte[] data) { IntPtr handle=GlobalAlloc(GMEM_MOVEABLE,(UIntPtr)(uint)data.Length); if (handle==IntPtr.Zero) return; IntPtr memory=GlobalLock(handle); if (memory==IntPtr.Zero) { GlobalFree(handle); return; } Marshal.Copy(data,0,memory,data.Length); GlobalUnlock(handle); if (SetClipboardData(format,handle)==IntPtr.Zero) GlobalFree(handle); }
+        private static int ReadClipboardDword(uint format) { IntPtr handle=GetClipboardData(format); if (handle==IntPtr.Zero || GlobalSize(handle).ToUInt64()<4) return -1; IntPtr memory=GlobalLock(handle); if (memory==IntPtr.Zero) return -1; try { return Marshal.ReadInt32(memory); } finally { GlobalUnlock(handle); } }
         private static string WindowTitle(IntPtr window) { StringBuilder title=new StringBuilder(512); return GetWindowText(window,title,title.Capacity)>0 ? title.ToString() : null; }
         private static string ProcessPath(IntPtr window) { uint pid; GetWindowThreadProcessId(window,out pid); if (pid==0) return null; IntPtr process=OpenProcess(0x1000,false,pid); if (process==IntPtr.Zero) return null; try { StringBuilder path=new StringBuilder(1024); int size=path.Capacity; return QueryFullProcessImageName(process,0,path,ref size) ? path.ToString() : null; } finally { CloseHandle(process); } }
         private static uint CurrentModifiers(int vk, bool down) { return (IsDown(0xA2,vk,down)||IsDown(0xA3,vk,down)?MOD_CONTROL:0)|(IsDown(0xA0,vk,down)||IsDown(0xA1,vk,down)?MOD_SHIFT:0)|(IsDown(0xA4,vk,down)||IsDown(0xA5,vk,down)?MOD_ALT:0)|(IsDown(0x5B,vk,down)||IsDown(0x5C,vk,down)?MOD_WIN:0); }
         private static uint ModifierFlag(int vk) { if (vk==0x11||vk==0xA2||vk==0xA3) return MOD_CONTROL; if (vk==0x10||vk==0xA0||vk==0xA1) return MOD_SHIFT; if (vk==0x12||vk==0xA4||vk==0xA5) return MOD_ALT; if (vk==0x5B||vk==0x5C) return MOD_WIN; return 0; }
         private static bool IsDown(int key, int vk, bool down) { return key==vk ? down : (GetAsyncKeyState(key)&0x8000)!=0; }
-        protected override void WndProc(ref Message m) { if (m.Msg==WM_WATCH_MOUSE) { SetMouseHook(m.WParam!=IntPtr.Zero); m.Result=(IntPtr)1; return; } if (m.Msg==WM_CAPTURE_HOTKEY) { bool ok=true; if (m.WParam!=IntPtr.Zero) ok=Register(config.CaptureShortcut,HOT_CAPTURE); else UnregisterHotKey(Handle,HOT_CAPTURE); /* on this thread it fails only when the shortcut was not registered, which also lets the copy through */ m.Result=(IntPtr)(ok?1:0); return; } if (m.Msg==WM_CLIPBOARDUPDATE) OnClipboardUpdate(); else if (m.Msg==WM_TIMER && m.WParam.ToInt64()==HOOK_TIMER || m.Msg==WM_POWERBROADCAST && m.WParam.ToInt64()==PBT_APMRESUMEAUTOMATIC) InstallHook(); else if (m.Msg==WM_WTSSESSION_CHANGE) { long reason=m.WParam.ToInt64(); if (reason==WTS_SESSION_UNLOCK || reason==WTS_CONSOLE_CONNECT || reason==WTS_REMOTE_CONNECT) InstallHook(); } else if (m.Msg==WM_HOTKEY) { int id=m.WParam.ToInt32(); if(id==HOT_CAPTURE && CaptureRequested!=null) CaptureRequested(); else if((id==HOT_PASTE || id==HOT_WINDOWS_PASTE) && PasteRequested!=null) PasteRequested(); else if(id==HOT_CANCEL && CancelRequested!=null) CancelRequested(); } base.WndProc(ref m); }
-        public void Dispose() { KillTimer(Handle,(UIntPtr)HOOK_TIMER); SetMouseHook(false); WTSUnRegisterSessionNotification(Handle); RemoveClipboardFormatListener(Handle); if (hook!=IntPtr.Zero) { UnhookWindowsHookEx(hook); hook=IntPtr.Zero; } UnregisterHotKey(Handle,HOT_CAPTURE); UnregisterHotKey(Handle,HOT_PASTE); UnregisterHotKey(Handle,HOT_CANCEL); DestroyHandle(); }
+        protected override void WndProc(ref Message m) { if (m.Msg==WM_RENDERFORMAT) { RenderFormat((uint)m.WParam.ToInt64()); m.Result=IntPtr.Zero; return; } if (m.Msg==WM_RENDERALLFORMATS) { RenderAllFormats(); m.Result=IntPtr.Zero; return; } if (m.Msg==WM_DESTROYCLIPBOARD) { published=null; m.Result=IntPtr.Zero; return; } if (m.Msg==WM_PUBLISH_CLIPBOARD) { m.Result=(IntPtr)(PublishNow(toPublish)?1:0); return; } if (m.Msg==WM_WATCH_MOUSE) { SetMouseHook(m.WParam!=IntPtr.Zero); m.Result=(IntPtr)1; return; } if (m.Msg==WM_CAPTURE_HOTKEY) { bool ok=true; if (m.WParam!=IntPtr.Zero) ok=Register(config.CaptureShortcut,HOT_CAPTURE); else UnregisterHotKey(Handle,HOT_CAPTURE); /* on this thread it fails only when the shortcut was not registered, which also lets the copy through */ m.Result=(IntPtr)(ok?1:0); return; } if (m.Msg==WM_CLIPBOARDUPDATE) OnClipboardUpdate(); else if (m.Msg==WM_TIMER && m.WParam.ToInt64()==HOOK_TIMER || m.Msg==WM_POWERBROADCAST && m.WParam.ToInt64()==PBT_APMRESUMEAUTOMATIC) InstallHook(); else if (m.Msg==WM_WTSSESSION_CHANGE) { long reason=m.WParam.ToInt64(); if (reason==WTS_SESSION_UNLOCK || reason==WTS_CONSOLE_CONNECT || reason==WTS_REMOTE_CONNECT) InstallHook(); } else if (m.Msg==WM_HOTKEY) { int id=m.WParam.ToInt32(); if(id==HOT_CAPTURE && CaptureRequested!=null) CaptureRequested(); else if((id==HOT_PASTE || id==HOT_WINDOWS_PASTE) && PasteRequested!=null) PasteRequested(id==HOT_WINDOWS_PASTE); else if(id==HOT_CANCEL && CancelRequested!=null) CancelRequested(); } base.WndProc(ref m); }
+        public void Dispose() { StopNormalPaste(); KillTimer(Handle,(UIntPtr)HOOK_TIMER); SetMouseHook(false); WTSUnRegisterSessionNotification(Handle); RemoveClipboardFormatListener(Handle); if (hook!=IntPtr.Zero) { UnhookWindowsHookEx(hook); hook=IntPtr.Zero; } UnregisterHotKey(Handle,HOT_CAPTURE); UnregisterHotKey(Handle,HOT_PASTE); UnregisterHotKey(Handle,HOT_CANCEL); DestroyHandle(); }
         [StructLayout(LayoutKind.Sequential)] private struct INPUT { public uint type; public KEYBDINPUT ki; private uint padding1; private uint padding2; } [StructLayout(LayoutKind.Sequential)] private struct KEYBDINPUT { public ushort wVk,wScan; public uint dwFlags,time; public UIntPtr dwExtraInfo; }
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd,out uint processId); [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(uint access,bool inherit,uint processId); [DllImport("kernel32.dll", CharSet=CharSet.Unicode, EntryPoint="QueryFullProcessImageNameW")] private static extern bool QueryFullProcessImageName(IntPtr process,uint flags,StringBuilder path,ref int size); [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
         [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd,StringBuilder text,int maxCount); [DllImport("user32.dll")] private static extern bool AddClipboardFormatListener(IntPtr hWnd); [DllImport("user32.dll")] private static extern bool RemoveClipboardFormatListener(IntPtr hWnd); [DllImport("user32.dll")] private static extern bool IsClipboardFormatAvailable(uint format);
@@ -195,19 +297,51 @@ namespace Paster.Windows
         [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public uint vkCode,scanCode,flags,time; public UIntPtr dwExtraInfo; } private delegate IntPtr LowLevelKeyboardProc(int code,IntPtr wParam,IntPtr lParam);
         [DllImport("user32.dll", SetLastError=true)] private static extern IntPtr SetWindowsHookEx(int idHook,LowLevelKeyboardProc proc,IntPtr module,uint threadId); [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hook); [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr wParam,IntPtr lParam); [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] private static extern IntPtr GetModuleHandle(string name); [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd,uint msg,IntPtr wParam,IntPtr lParam);
         [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd,int id,uint fsModifiers,uint vk); [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd,int id); [DllImport("user32.dll", SetLastError=true)] private static extern uint SendInput(uint n,ref INPUT i,int size); [DllImport("user32.dll", EntryPoint="SendInput", SetLastError=true)] private static extern uint SendInputBatch(uint n,[In] INPUT[] inputs,int size); [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey); [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber(); [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern short VkKeyScanEx(char ch,IntPtr layout); [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint threadId);
+        [DllImport("user32.dll")] private static extern bool OpenClipboard(IntPtr owner); [DllImport("user32.dll")] private static extern bool CloseClipboard(); [DllImport("user32.dll")] private static extern bool EmptyClipboard(); [DllImport("user32.dll")] private static extern uint EnumClipboardFormats(uint format); [DllImport("user32.dll")] private static extern IntPtr GetClipboardData(uint format); [DllImport("user32.dll")] private static extern IntPtr SetClipboardData(uint format,IntPtr data); [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner(); [DllImport("user32.dll")] private static extern IntPtr GetOpenClipboardWindow(); [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern uint RegisterClipboardFormat(string name); [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
+        [DllImport("kernel32.dll")] private static extern IntPtr GlobalAlloc(uint flags,UIntPtr bytes); [DllImport("kernel32.dll")] private static extern IntPtr GlobalLock(IntPtr memory); [DllImport("kernel32.dll")] private static extern bool GlobalUnlock(IntPtr memory); [DllImport("kernel32.dll")] private static extern UIntPtr GlobalSize(IntPtr memory); [DllImport("kernel32.dll")] private static extern IntPtr GlobalFree(IntPtr memory);
         [DllImport("user32.dll")] private static extern uint MapVirtualKeyEx(uint code,uint mapType,IntPtr layout);
         [DllImport("user32.dll")] private static extern IntPtr SendMessageTimeout(IntPtr hWnd,int msg,IntPtr wParam,IntPtr lParam,uint flags,uint timeout,out IntPtr result);
         [DllImport("user32.dll")] private static extern UIntPtr SetTimer(IntPtr hWnd,UIntPtr id,uint elapse,IntPtr callback); [DllImport("user32.dll")] private static extern bool KillTimer(IntPtr hWnd,UIntPtr id); [DllImport("wtsapi32.dll")] private static extern bool WTSRegisterSessionNotification(IntPtr hWnd,uint flags); [DllImport("wtsapi32.dll")] private static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);    }
 
+    // Read: the target's process read the text, so the paste reached its session. NotRead: no read within the timeout, the paste is blocked.
+    // NotSent: nothing reached the window (the clipboard was busy or input was rejected), so typing cannot double anything. FocusLost and
+    // Cancelled: Paster stopped before or while pasting and does nothing more.
+    internal enum NormalPasteResult { Read, NotRead, NotSent, FocusLost, Cancelled }
+
+    // Ctrl+V in an app listed under "Paste normally first": the session's own paste is tried, and Paster types only where it is blocked.
+    internal sealed class PasteFirstFlow
+    {
+        private readonly WindowsPlatform platform; private readonly TransferCoordinator coordinator; private readonly PasterConfig config; public readonly PasteFirstMemory Checks=new PasteFirstMemory();
+        public PasteFirstFlow(WindowsPlatform p, TransferCoordinator c, PasterConfig cfg) { platform=p; coordinator=c; config=cfg; }
+        // Returns false when the text should be typed now: the window does not paste normally first, its paste is blocked, or the clipboard
+        // content cannot be watched in a window not yet checked. Returns true when Paster pasted normally or deliberately did nothing.
+        public bool Run(IntPtr target)
+        {
+            if (!platform.IsPasteFirstWindow(target)) return false;
+            string text; ClipboardKind kind=platform.ReadClipboardText(out text);
+            PasteAction action=PasteFirstMemory.Decide(Checks.Get(target,WindowsPlatform.IsWindowAlive),kind);
+            if (action==PasteAction.Type) return false;
+            if (action==PasteAction.PasteNormally) { if (platform.ForegroundWindow==target) platform.SendPasteShortcut(); return true; }
+            switch (platform.TryNormalPaste(target,text))
+            {
+                case NormalPasteResult.Read: Checks.Set(target,PasteCheck.Works,WindowsPlatform.IsWindowAlive); return true;
+                case NormalPasteResult.NotRead: Checks.Set(target,PasteCheck.Blocked,WindowsPlatform.IsWindowAlive); coordinator.ReportError(PasteFirstMemory.BlockedMessage(platform.DescribeWindow(target))); return true;
+                case NormalPasteResult.NotSent: return false;
+                default: return true;
+            }
+        }
+        public string StatusLine { get { return String.IsNullOrWhiteSpace(config.PasteFirstApps) ? null : String.Format("Paste normally first: works in {0}, blocked in {1} window(s)",Checks.Count(PasteCheck.Works),Checks.Count(PasteCheck.Blocked)); } }
+    }
+
     internal sealed class PasterApplicationContext : ApplicationContext
     {
-        private readonly TransferCoordinator coordinator; private readonly PasterConfig config; private readonly string configPath; private readonly WindowsPlatform platform; private readonly ManagementPipe pipe; private readonly Control dispatcher; private readonly object workerGate=new object(); private readonly List<Thread> workers=new List<Thread>(); private long lastTransferFailure; private volatile bool pastePending; private TrayIcon tray; private volatile bool exiting;
+        private readonly TransferCoordinator coordinator; private readonly PasterConfig config; private readonly string configPath; private readonly WindowsPlatform platform; private readonly ManagementPipe pipe; private readonly Control dispatcher; private readonly object workerGate=new object(); private readonly List<Thread> workers=new List<Thread>(); private long lastTransferFailure; private volatile bool pastePending; private TrayIcon tray; private volatile bool exiting; private readonly PasteFirstFlow pasteFirst;
         public PasterApplicationContext(WindowsPlatform p, TransferCoordinator c, PasterConfig cfg, string path, string startupError)
         {
-            platform=p; coordinator=c; config=cfg; configPath=path; dispatcher=new Control();dispatcher.CreateControl();
+            platform=p; coordinator=c; config=cfg; configPath=path; dispatcher=new Control();dispatcher.CreateControl(); pasteFirst=new PasteFirstFlow(platform,coordinator,config);
             platform.CaptureRequested += delegate { StartWorker(delegate { try { coordinator.Capture(); } catch(Exception ex) { coordinator.ReportError(ex.Message); } }); };
-            platform.PasteRequested += delegate { if (pastePending || coordinator.Status.IsTransferring || TransferFailedRecently()) return; pastePending=true; StartWorker(delegate { WindowsPlatform.SetHighResolutionTimer(true); platform.WatchMouse(true); try { if (!platform.WaitForPasteShortcutRelease()) { coordinator.ReportError("Paste shortcut keys were not released."); return; } if (!coordinator.Transfer(CodeModeKeys.None, config.CodeModeForRemotePaste ? config.CodeModeKeys : CodeModeKeys.None)) Interlocked.Exchange(ref lastTransferFailure,Stopwatch.GetTimestamp()); } catch(Exception ex) { coordinator.ReportError(ex.Message); } finally { platform.WatchMouse(false); pastePending=false; WindowsPlatform.SetHighResolutionTimer(false); } }); };
-            platform.CancelRequested += delegate { coordinator.Cancel(); };
+            platform.PasteRequested += delegate(bool ctrlV) { if (pastePending || coordinator.Status.IsTransferring || TransferFailedRecently()) return; pastePending=true; StartWorker(delegate { WindowsPlatform.SetHighResolutionTimer(true); platform.WatchMouse(true); try { if (!platform.WaitForPasteShortcutRelease()) { coordinator.ReportError("Paste shortcut keys were not released."); return; } if (ctrlV && pasteFirst.Run(platform.ForegroundWindow)) return; if (!coordinator.Transfer(CodeModeKeys.None, config.CodeModeForRemotePaste ? config.CodeModeKeys : CodeModeKeys.None)) Interlocked.Exchange(ref lastTransferFailure,Stopwatch.GetTimestamp()); } catch(Exception ex) { coordinator.ReportError(ex.Message); } finally { platform.WatchMouse(false); pastePending=false; WindowsPlatform.SetHighResolutionTimer(false); } }); };
+            platform.CancelRequested += delegate { coordinator.Cancel(); platform.CancelNormalPaste(); };
             coordinator.Failed += Notify;
             UpdateTray(); if (!String.IsNullOrEmpty(startupError)) Notify(startupError);
             pipe=new ManagementPipe(this);
@@ -224,8 +358,8 @@ namespace Paster.Windows
         // Runs after the settings dialog saved: shortcuts are re-registered at once, so no restart is needed.
         private string ApplySettings() { string error=platform.ReloadShortcuts(); UpdateTray(); return error; }
         public void DispatchCommand(string command) { if(dispatcher.IsDisposed) return; try { dispatcher.BeginInvoke((MethodInvoker)delegate { Command(command); }); } catch(InvalidOperationException) { } }
-        public void Command(string command) { if (exiting) return; if (command=="settings") Management.ShowSettings(config,configPath,ApplySettings); else if(command=="status") Management.ShowStatus(coordinator); else if(command=="clear") coordinator.Clear(); else if(command=="exit") ExitThread(); else if(command=="enable-autostart") Management.SetAutostart(true); else if(command=="disable-autostart") Management.SetAutostart(false); }
+        public void Command(string command) { if (exiting) return; if (command=="settings") Management.ShowSettings(config,configPath,ApplySettings); else if(command=="status") Management.ShowStatus(coordinator,pasteFirst.StatusLine); else if(command=="clear") { coordinator.Clear(); pasteFirst.Checks.Clear(); } else if(command=="exit") ExitThread(); else if(command=="enable-autostart") Management.SetAutostart(true); else if(command=="disable-autostart") Management.SetAutostart(false); }
         private void StartWorker(ThreadStart action) { Thread t=null;t=new Thread((ThreadStart)delegate { try { action(); } finally { lock(workerGate) workers.Remove(Thread.CurrentThread); } });t.IsBackground=true;t.SetApartmentState(ApartmentState.STA);lock(workerGate) workers.Add(t);t.Start(); }
-        protected override void ExitThreadCore() { if (exiting) return; exiting=true; coordinator.Failed -= Notify; coordinator.Cancel(); Thread[] active;lock(workerGate) active=workers.ToArray();for(int i=0;i<active.Length;i++) active[i].Join(2500);pipe.Dispose();if (tray!=null) { tray.Dispose(); tray=null; }dispatcher.Dispose();base.ExitThreadCore(); }
+        protected override void ExitThreadCore() { if (exiting) return; exiting=true; coordinator.Failed -= Notify; coordinator.Cancel(); platform.StopNormalPaste(); Thread[] active;lock(workerGate) active=workers.ToArray();for(int i=0;i<active.Length;i++) active[i].Join(2500);pipe.Dispose();if (tray!=null) { tray.Dispose(); tray=null; }dispatcher.Dispose();base.ExitThreadCore(); }
     }
 }

@@ -111,6 +111,44 @@ inside the session itself is typed rather than pasted.
 Use `Ctrl+Shift+V` to type regardless (except into programs running as
 administrator).
 
+### Paste normally first (optional)
+
+Where the session's own paste sometimes works, Paster can try it first and
+type only where it is blocked. List the remote application under "Paste
+normally first in apps" (`pasteFirstApps`; same entry format, empty by
+default). `Ctrl+V` in that application then works like this:
+
+1. Paster puts the clipboard's text back on the clipboard in a way that makes
+   Windows tell it when a program reads the text, and sends the normal `Ctrl+V`.
+2. If the remote client reads the text within 3 seconds, the paste reached
+   your session (also through a nested session, which asks back through each
+   hop): done, instantly and exactly. This is checked again with every paste.
+3. If not, clipboard sharing is blocked somewhere on the way. Paster tells you,
+   and `Ctrl+V` types into that window from then on. A blocked session pastes
+   its own clipboard instead (whatever was last copied inside it), so if
+   something else appeared, undo it (`Ctrl+Z`) and press `Ctrl+V` again.
+
+Details:
+
+- Only plain text is ever put back on the clipboard (copies from Notepad,
+  Notepad++, terminals, PowerShell), so nothing is lost. Content with other
+  formats (HTML from browsers or VS Code, Office documents, images) is left
+  untouched: it is pasted normally in a window where a normal paste has
+  already been seen to work, and typed elsewhere.
+- Text marked private by password managers is always typed.
+- While Paster watches a paste, other programs (such as clipboard managers)
+  cannot read the text, so they cannot be mistaken for the remote client; the
+  re-published copy is also kept out of the Windows clipboard history.
+- Browser-based clients (Edge, Chrome, Firefox, and similar) read the clipboard
+  as soon as `Ctrl+V` is pressed, even when a nested session will reject the
+  text, so a read proves nothing there: they always type, even when listed.
+- In a window where you switch between sessions that allow and block clipboard
+  sharing (for example a nested session inside it), the first blocked paste
+  makes that window type from then on.
+- `Ctrl+Shift+V` always types. `--status` shows in how many windows the
+  normal paste works or is blocked; `--clear` and restarting Paster forget
+  them.
+
 Listed applications are also typed at the remote speed (1,000 keystrokes per
 second by default; a browser-based Windows Cloud session measured about 630
 delivered keystrokes per second at this setting and stopped immediately when
@@ -330,6 +368,7 @@ when you save there.
 | `promptTimeoutSeconds` | Prompt timeout (s) | `120` | 10-3,600 |
 | `typeOnCtrlV` | Type on Ctrl+V in listed apps | `true` | `false`: `Ctrl+V` is never intercepted |
 | `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
+| `pasteFirstApps` | Paste normally first in apps | empty | Comma-separated `process[:title text]`; `Ctrl+V` tries the session's own paste first (browsers excluded) |
 | `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
 | `codeModeForRemotePaste` | Use code mode in remote windows | `true` | Applies to `Ctrl+V` and `Ctrl+Shift+V`; `false`: plain typing |
 | `codeModeDismissSuggestions` | Code mode: Space+Backspace before Enter and Tab | `true` | Closes suggestion popups without removing text |
@@ -372,8 +411,10 @@ Run the installed executable with one of these explicit commands:
 `--status` reports whether a capture exists, whether transfer is active,
 whether Windows accepted the last simulated input, the current target-window
 handle, the
-resume point of an interrupted transfer, and the latest error. `--clear`
-removes the in-memory capture and resume point.
+resume point of an interrupted transfer, and the latest error; with "Paste
+normally first" apps listed, also in how many windows the normal paste works
+or is blocked. `--clear` removes the in-memory capture and resume point and
+forgets those windows.
 
 ## Remove
 
