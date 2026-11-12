@@ -52,11 +52,18 @@ cannot overlap.
 
 Text is sent in small batches, each as one atomic `SendInput` call:
 
-- Characters that need no modifier on the active keyboard layout (lowercase
-  letters, digits, space) are sent as virtual keys, unless "Type all characters
-  as Unicode" (`typeAllAsUnicode`) is on; Tab and line breaks are
-  sent as the Tab and Enter keys, and CRLF line endings become a single Enter
-  press.
+- In remote windows (the listed applications) every character is sent as a
+  Unicode character, so it arrives exactly regardless of the remote keyboard
+  layout, and nested sessions (a remote client inside a remote session) cannot
+  duplicate it.
+- Elsewhere, characters that need no modifier on the destination window's
+  keyboard layout (lowercase letters, digits, space) are sent as virtual keys
+  with their real scan codes, like physical keys, unless "Type all characters
+  as Unicode" (`typeAllAsUnicode`) is on.
+- Tab and line breaks are sent as the Tab and Enter keys, and CRLF line endings
+  become a single Enter press. In remote windows they are sent separately from
+  the surrounding characters, and the characters after them wait briefly, so
+  the keys cannot arrive late (see [Current limitations](#current-limitations)).
 - Everything else (uppercase letters, shifted symbols, AltGr and non-layout
   characters) is sent as Unicode input. Paster never presses Shift, Ctrl, or
   Alt while typing, so rapid typing cannot trigger the Sticky Keys prompt or
@@ -73,11 +80,14 @@ that text was copied locally.
 
 The default list covers the Remote Desktop clients `mstsc.exe`, `msrdc.exe`,
 and Remote Desktop Connection Manager (`RDCMan.exe`), and the browser-based
-Windows Cloud client in Edge or Chrome. A settings file written before an app
-was added to the defaults keeps its own list; add the app there. Entries are
+Windows 365 client in Edge or Chrome, recognized by its window title ("Windows
+App", formerly "Windows Cloud"). A settings file written before an app was
+added to the defaults keeps its own list; add the app there. Entries are
 comma-separated process names (`.exe` is optional); add `:text` to require the
-window title to contain that text (for example `msedge.exe:Windows Cloud`), so
-other browser tabs keep their normal paste. Edit the list in the settings
+window title to contain that text (for example `msedge.exe:Windows App`), so
+other browser tabs keep their normal paste. If a browser-based remote session
+is not recognized (Ctrl+V pastes normally there, and Ctrl+Shift+V types
+without code mode), add its window title text to the list. Edit the list in the settings
 dialog; changes apply immediately, and an empty list disables the feature.
 
 Text copied inside the remote session is typed too, once it reaches the local
@@ -143,9 +153,9 @@ Code editors such as VS Code and Notepad++ react to typed keys: they add
 indentation after Enter, insert closing brackets and quotes, and accept
 autocomplete or inline suggestions on Enter and Tab. Typed code then arrives
 with doubled indentation, extra brackets, or replaced words. Paster cannot see
-which application is focused inside a remote session, so for `Ctrl+V` into a
-remote window it can type in code mode (on by default; each key can be turned
-on or off in the settings dialog):
+which application is focused inside a remote session, so it types into remote
+windows in code mode, whether `Ctrl+V` or `Ctrl+Shift+V` started the paste (on
+by default; each key can be turned on or off in the settings dialog):
 
 - **Space, then Backspace** before each Enter and Tab (on by default, skipped
   after whitespace) ends the current word, so suggestion popups such as
@@ -154,9 +164,12 @@ on or off in the settings dialog):
   removed again, so terminals, documents, and spreadsheet cells are unchanged.
 - **Home** after each Enter (on by default) moves before any auto-inserted
   indentation, so the line's own indentation is typed exactly. The editor's
-  indentation ends up at the end of the line; most editors remove or replace it
-  on the next Enter, but the last line can keep trailing whitespace. It never
-  removes existing text, so it is safe in terminals, documents, and chats.
+  indentation ends up at the end of the line, so **End** is pressed before each
+  Enter: otherwise Enter would carry that indentation to the next line, where a
+  smart Home (Notepad++, VS Code) stops after it and every second line gains
+  indentation. Lines can therefore keep trailing whitespace in editors that do
+  not remove it. Neither key removes existing text, so both are safe in
+  terminals, documents, and chats.
 - **Escape** before each Enter and Tab (off by default) also closes suggestion
   popups, including inline (ghost text) suggestions. It also clears the current line in
   PowerShell and cmd, cancels spreadsheet cell edits, and can close dialogs, so
@@ -167,8 +180,8 @@ on or off in the settings dialog):
   does; Notepad++ does not by default); anywhere else it deletes the next
   character of existing text.
 
-`Ctrl+Shift+V` always types plain text without code mode. Editors that
-auto-close HTML tags are not covered.
+In local windows, `Ctrl+Shift+V` types plain text without code mode. Editors
+that auto-close HTML tags are not covered.
 
 ## Transfer safety and interruption
 
@@ -309,21 +322,22 @@ when you save there.
 | `characterDelayMilliseconds` | Delay per batch (ms) | `2` | 0-60,000 |
 | `charactersPerBatch` | Characters per batch | `32` | 1-4,096 |
 | `typeShiftedAsUnicode` | Type uppercase and symbols as Unicode | `true` | `false`: type them with Shift (can trigger Sticky Keys) |
-| `typeAllAsUnicode` | Type all characters as Unicode (any keyboard layout) | `false` | `true`: letters and digits are layout-independent too |
+| `typeAllAsUnicode` | Type all characters as Unicode (any keyboard layout) | `false` | `true`: letters and digits are layout-independent in local windows too (remote windows always get Unicode) |
 | `stopOnUserInput` | Stop typing on key press or click | `true` | `false`: only the cancel shortcut and focus changes stop typing |
 | `clipboardTimeoutMilliseconds` | Clipboard timeout (ms) | `2000` | 100-120,000 |
 | `maximumTextCharacters` | Maximum characters | `16777216` | 1-268,435,456 |
 | `confirmAboveLines` | Confirm pastes over (lines) | `2000` | 0 (never confirm or resume)-100,000,000 |
 | `promptTimeoutSeconds` | Prompt timeout (s) | `120` | 10-3,600 |
 | `typeOnCtrlV` | Type on Ctrl+V in listed apps | `true` | `false`: `Ctrl+V` is never intercepted |
-| `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
+| `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
 | `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
-| `codeModeForRemotePaste` | Use code mode for Ctrl+V into remote windows | `true` | `false`: plain typing |
+| `codeModeForRemotePaste` | Use code mode in remote windows | `true` | Applies to `Ctrl+V` and `Ctrl+Shift+V`; `false`: plain typing |
 | `codeModeDismissSuggestions` | Code mode: Space+Backspace before Enter and Tab | `true` | Closes suggestion popups without removing text |
 | `codeModeEscapeBeforeEnter` | Code mode: Escape before Enter and Tab | `false` | Clears terminal lines and cancels spreadsheet cell edits |
 | `codeModeHomeAfterEnter` | Code mode: Home after Enter | `true` | |
 | `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `false` | Only safe when typing at the end of a document into an editor that auto-closes |
 | `remoteCharactersPerSecond` | Remote speed (keys/s) | `1000` | Keystrokes per second; 0 (unlimited)-100,000 |
+| `remoteKeyPauseMilliseconds` | Pause after Enter and Tab (ms) | `150` | 0-1,000; raise it if lines still arrive out of order in a nested session, 0 turns it off |
 | `showTrayIcon` | Show tray icon | `false` | `true`: the notification-area icon (with its menu) stays visible; when off, it appears only while a notification is shown |
 | `showNotifications` | Show notifications when something goes wrong | `true` | `false`: no notifications; failures appear only in `--status` |
 
@@ -377,10 +391,18 @@ directory. It does not remove unrelated user files.
 - Windows 10/11 interactive user sessions are the supported environment.
 - Unicode `SendInput` handling depends on the destination application; a few
   older console programs and games ignore Unicode input.
-- Lowercase letters, digits, and unshifted punctuation are sent as keys of the
-  destination window's keyboard layout. If a remote session uses a different layout (for
-  example US locally and German remotely), turn on "Type all characters as
-  Unicode" so every character arrives exactly.
+- In local windows, lowercase letters, digits, and unshifted punctuation are
+  sent as keys of the destination window's keyboard layout; turn on "Type all
+  characters as Unicode" if a local program interprets them with a different
+  layout. Remote windows always receive Unicode characters.
+- Tab, Enter, and code mode's extra keys are always sent as keys, in remote
+  windows too: most programs do not treat a Unicode line break or tab as the
+  Enter or Tab key. Keys and Unicode characters can travel separately through
+  a nested session, and keys were seen arriving up to about 60 ms after the
+  characters typed next, so in remote windows the characters after Enter or
+  Tab wait 150 ms (`remoteKeyPauseMilliseconds`), about 7 seconds for a
+  50-line paste. If a nested session still mixes up lines, raise it; for a
+  single remote session that never does, it can be lowered.
 - If Windows rejects simulated input (a UAC prompt or the lock screen during a
   transfer), that transfer stops and keeps its resume point; the next paste
   tries again.

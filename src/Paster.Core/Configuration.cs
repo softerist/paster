@@ -29,7 +29,7 @@ namespace Paster.Core
         [DataMember(Name="confirmAboveLines", Order=13)] public int ConfirmAboveLines = 2000;
         [DataMember(Name="promptTimeoutSeconds", Order=14)] public int PromptTimeoutSeconds = 120;
         [DataMember(Name="typeOnCtrlV", Order=15)] public bool TypeOnCtrlV = true;
-        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
+        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
         [DataMember(Name="typeRemoteCopies", Order=17)] public bool TypeRemoteCopies = true;
         [DataMember(Name="codeModeForRemotePaste", Order=18)] public bool CodeModeForRemotePaste = true;
         [DataMember(Name="codeModeDismissSuggestions", Order=19)] public bool CodeModeDismissSuggestions = true;
@@ -40,6 +40,9 @@ namespace Paster.Core
         [DataMember(Name="showTrayIcon", Order=24)] public bool ShowTrayIcon = false;
         // Independent of the tray icon: without a permanent icon, Paster shows its icon only while a notification is on screen.
         [DataMember(Name="showNotifications", Order=25)] public bool ShowNotifications = true;
+        // Remote windows get characters as Unicode but Enter, Tab, and code mode's keys as keys; a remote client inside a remote session
+        // delivered those keys up to about 60 ms after the characters that followed them. Characters after keys wait this long.
+        [DataMember(Name="remoteKeyPauseMilliseconds", Order=26)] public int RemoteKeyPauseMilliseconds = 150;
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
 
@@ -52,6 +55,7 @@ namespace Paster.Core
             if (CharacterDelayMilliseconds < 0 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds", "Batch delay must be between 0 and 60000 milliseconds.");
             if (CharactersPerBatch < 1 || CharactersPerBatch > 4096) throw new ArgumentOutOfRangeException("CharactersPerBatch", "Characters per batch must be between 1 and 4096.");
             if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds", "Clipboard timeout must be between 100 and 120000 milliseconds.");
+            if (RemoteKeyPauseMilliseconds < 0 || RemoteKeyPauseMilliseconds > 1000) throw new ArgumentOutOfRangeException("RemoteKeyPauseMilliseconds", "The pause after Enter and Tab must be between 0 and 1000 milliseconds.");
             if (RemoteCharactersPerSecond < 0 || RemoteCharactersPerSecond > 100000) throw new ArgumentOutOfRangeException("RemoteCharactersPerSecond", "Remote speed must be between 0 (unlimited) and 100000 characters per second.");
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > MaximumTextLimit) throw new ArgumentOutOfRangeException("MaximumTextCharacters", "Maximum characters must be between 1 and " + MaximumTextLimit.ToString("N0") + ".");
             if (PromptTimeoutSeconds < 10 || PromptTimeoutSeconds > 3600) throw new ArgumentOutOfRangeException("PromptTimeoutSeconds", "Prompt timeout must be between 10 and 3600 seconds.");

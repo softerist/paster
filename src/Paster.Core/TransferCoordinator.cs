@@ -31,7 +31,11 @@ namespace Paster.Core
             finally { lock (gate) { captureInProgress = false; } }
         }
         public bool Transfer() { return Transfer(CodeModeKeys.None); }
-        public bool Transfer(CodeModeKeys codeMode)
+        public bool Transfer(CodeModeKeys codeMode) { return Transfer(codeMode, CodeModeKeys.None); }
+        // remoteCodeMode is added when the destination is a remote window. Paster cannot see which program has the focus inside a remote
+        // session, so code mode applies there whichever shortcut started the paste: without it, plain typing into Notepad++ in a remote
+        // session lost line breaks to word completion and stacked auto-indentation on every line.
+        public bool Transfer(CodeModeKeys codeMode, CodeModeKeys remoteCodeMode)
         {
             string text;
             // The clipboard is read outside the lock: a clipboard owned by a remote session can take seconds to render, and Status callers must not wait on it.
@@ -59,14 +63,34 @@ namespace Paster.Core
             if (text.IndexOf('\r') >= 0) text = text.Replace("\r\n", "\n").Replace('\r', '\n');
             // Remote clients consume input far slower than SendInput accepts it; anything sent ahead of them queues up where cancellation
             // can no longer reach it. Pacing remote targets in ~10 ms batches keeps that backlog small so interruption stays immediate.
-            bool remote = platform.IsRemoteWindow(target); int rate = remote ? config.RemoteCharactersPerSecond : 0; int batchSize = rate > 0 ? Math.Max(1, Math.Min(config.CharactersPerBatch, rate / 100)) : config.CharactersPerBatch; Stopwatch paced = Stopwatch.StartNew();
+            bool remote = platform.IsRemoteWindow(target); if (remote) codeMode |= remoteCodeMode; int rate = remote ? config.RemoteCharactersPerSecond : 0; int batchSize = rate > 0 ? Math.Max(1, Math.Min(config.CharactersPerBatch, rate / 100)) : config.CharactersPerBatch; Stopwatch paced = Stopwatch.StartNew();
             // Only large texts (more lines than the threshold) are confirmed and can be resumed; shorter ones always type from the start.
             int lines = CountLines(text); bool large = config.ConfirmAboveLines > 0 && lines > config.ConfirmAboveLines;
             int offset = 0, sent = 0; long keysSent = 0;
             try
             {
                 offset = ChooseStart(text, lines, large, target, remote, rate, batchSize, codeMode, token); if (offset < 0) return Reject("Transfer cancelled."); sent = offset;
-                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); IntPtr focused = platform.ForegroundWindow; if (focused != target) { if (platform.HasRecentUserInput) throw new OperationCanceledException(SwitchedWindowMessage); throw new InvalidOperationException(FocusLostMessage(focused, target, i, text.Length, large)); } int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; try { if (!platform.SendText(text, i, length, codeMode)) throw new InvalidOperationException("Windows input rejected a text batch."); } catch (InputRejectedException rejected) { sent = i + rejected.CharactersSent; if (sent > 0 && sent < text.Length && Char.IsLowSurrogate(text[sent])) sent--; throw; } keysSent += CodeTyping.CountKeys(text, i, length, codeMode); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, keysSent * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
+                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); long pausedMs = 0;
+                for (int i = offset; i < text.Length; )
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input.");
+                    IntPtr focused = platform.ForegroundWindow; if (focused != target) { if (platform.HasRecentUserInput) throw new OperationCanceledException(SwitchedWindowMessage); throw new InvalidOperationException(FocusLostMessage(focused, target, i, text.Length, large)); }
+                    int length = Math.Min(batchSize, text.Length - i);
+                    // Remote windows get characters as Unicode and Enter, Tab, and code mode's keys as keys. A remote client inside a remote session
+                    // delivered such keys after the characters typed next ("[switch]" lost its "s" to a late Backspace, and a late Home moved text
+                    // to the start of a line), so keys get batches of their own and the characters after them wait until the keys have arrived.
+                    bool keys = remote && CodeTyping.ProducesKeys(text[i], codeMode);
+                    if (remote) { int end = i + 1; while (end < i + length && CodeTyping.ProducesKeys(text[end], codeMode) == keys) end++; length = end - i; }
+                    if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++;
+                    try { if (!platform.SendText(text, i, length, codeMode, remote)) throw new InvalidOperationException("Windows input rejected a text batch."); }
+                    catch (InputRejectedException rejected) { sent = i + rejected.CharactersSent; if (sent > 0 && sent < text.Length && Char.IsLowSurrogate(text[sent])) sent--; throw; }
+                    keysSent += CodeTyping.CountKeys(text, i, length, codeMode); i += length; sent = i;
+                    // The pause is not part of the speed budget, so the characters after it are not sent in a burst to catch up.
+                    int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, keysSent * 1000 / rate - (paced.ElapsedMilliseconds - pausedMs));
+                    if (keys && i < text.Length && !CodeTyping.ProducesKeys(text[i], codeMode)) { wait += config.RemoteKeyPauseMilliseconds; pausedMs += config.RemoteKeyPauseMilliseconds; }
+                    clock.Sleep(wait, token);
+                }
                 lock (gate) { resumeText = null; resumeOffset = 0; } return true;
             }
             catch (OperationCanceledException ex) { if (large) SaveResumePoint(text, sent); return Reject(token.IsCancellationRequested ? "Transfer cancelled." : ex.Message); } catch (Exception ex) { if (large) SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
@@ -82,8 +106,8 @@ namespace Paster.Core
             if (!large) return 0;
             // Duration is bounded by the batch delay floor (characters per batch) and, for remote targets, by the rate in keystrokes.
             double charactersPerSecond = batchSize * 1000.0 / Math.Max(1, config.CharacterDelayMilliseconds);
-            TimeSpan full = TimeSpan.FromSeconds(Math.Max(text.Length / charactersPerSecond, rate > 0 ? CodeTyping.CountKeys(text, 0, text.Length, codeMode) / (double)rate : 0));
-            TimeSpan rest = TimeSpan.FromSeconds(Math.Max((text.Length - resumeAt) / charactersPerSecond, rate > 0 ? CodeTyping.CountKeys(text, resumeAt, text.Length - resumeAt, codeMode) / (double)rate : 0));
+            TimeSpan full = TimeSpan.FromSeconds(Math.Max(text.Length / charactersPerSecond, rate > 0 ? CodeTyping.CountKeys(text, 0, text.Length, codeMode) / (double)rate : 0) + KeyPauseSeconds(text, 0, remote, codeMode));
+            TimeSpan rest = TimeSpan.FromSeconds(Math.Max((text.Length - resumeAt) / charactersPerSecond, rate > 0 ? CodeTyping.CountKeys(text, resumeAt, text.Length - resumeAt, codeMode) / (double)rate : 0) + KeyPauseSeconds(text, resumeAt, remote, codeMode));
             string where = remote ? "the remote session" : "this window", nl = Environment.NewLine;
             string message = resumeAt > 0
                 ? String.Format("Typing into {0} stopped after {1:N0} of {2:N0} characters ({3}%).{7}{7}Resume types the remaining {4:N0} characters ({5}). Start over types all of them again ({6}).", where, resumeAt, text.Length, (long)resumeAt * 100 / text.Length, text.Length - resumeAt, TransferPrompt.Describe(rest), TransferPrompt.Describe(full), nl)
@@ -103,6 +127,7 @@ namespace Paster.Core
             string who = name == null ? "another window" : name == own ? "another " + name + " window" : name;
             return String.Format("Typing stopped because {0} took the focus ({1:N0} of {2:N0} characters typed).{3}", who, typed, total, large ? " Paste again in the original window to resume." : "");
         }
+        private double KeyPauseSeconds(string text, int start, bool remote, CodeModeKeys codeMode) { return remote ? CodeTyping.CountKeyPauses(text, start, text.Length - start, codeMode) * config.RemoteKeyPauseMilliseconds / 1000.0 : 0; }
         private static int CountLines(string text) { int lines = 1; for (int i = 0; i < text.Length; i++) if (text[i] == '\n') lines++; return lines; }
         private void SaveResumePoint(string text, int sent) { lock (gate) { if (sent > 0 && sent < text.Length) { resumeText = text; resumeOffset = sent; } } }
         public void Cancel() { lock (gate) { if (cancellation != null) cancellation.Cancel(); } }

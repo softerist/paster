@@ -11,7 +11,8 @@ namespace Paster.Core
         uint ClipboardSequence { get; }
         bool SendCopyShortcut();
         bool TryReadClipboard(out string text);
-        bool SendText(string text, int start, int length, CodeModeKeys codeMode);
+        // remote: the destination is a remote-desktop client (a listed app); every character is then sent as a Unicode character, not a key.
+        bool SendText(string text, int start, int length, CodeModeKeys codeMode, bool remote);
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
         bool IsRemoteWindow(IntPtr window);
@@ -30,7 +31,7 @@ namespace Paster.Core
         public string LastError; public bool HasCapture; public bool IsTransferring; public bool IsInputAvailable; public IntPtr TargetWindow; public int ResumeOffset; public int ResumeTotal;
     }
     public enum TransferChoice { Cancel, Start, Resume }
-    public enum KeyAction { Character, Enter, Tab, Escape, Home, Delete, Backspace }
+    public enum KeyAction { Character, Enter, Tab, Escape, Home, Delete, Backspace, End }
     // Index is the position (relative to the expanded range) of the character that produced the key (helper keys share their character's index).
     public struct TypedKey { public KeyAction Action; public char Character; public int Index; public TypedKey(KeyAction action, char character, int index) { Action = action; Character = character; Index = index; } }
     // Thrown by SendText when Windows inserted only part of a batch; CharactersSent counts the leading characters whose key reached the target.
@@ -40,19 +41,26 @@ namespace Paster.Core
     //   so suggestion popups (Notepad++ word completion, VS Code IntelliSense) close instead of Enter/Tab accepting them, and Backspace removes
     //   it. It is a no-op in terminals and documents, and it is skipped after whitespace, where Backspace could unindent or clear a cell.
     // - EscapeBeforeEnter closes popups too, but also clears terminal input lines and cancels spreadsheet cell edits.
-    // - HomeAfterEnter moves before auto-inserted indentation so the line's own indentation is typed exactly.
+    // - HomeAfterEnter moves before auto-inserted indentation so the line's own indentation is typed exactly. That indentation stays after the
+    //   caret, and Enter would carry it to the next line, where a smart Home (Notepad++, VS Code) stops after it instead of at the line start:
+    //   every second line gained indentation. So End comes first and Enter always splits at the end of the line.
     // - DeleteAutoClosed removes an auto-closed bracket or quote; it assumes typing at the end of a document.
     [Flags] public enum CodeModeKeys { None = 0, EscapeBeforeEnter = 1, HomeAfterEnter = 2, DeleteAutoClosed = 4, DismissSuggestions = 8, All = 15 }
     public static class CodeTyping
     {
         public const string Openers = "([{\"'`";
+        // True when Expand turns the character into keys rather than (only) a character: line breaks and tabs always, openers when
+        // DeleteAutoClosed adds Delete. Remote windows receive characters as Unicode and these as keys, which travel separately.
+        public static bool ProducesKeys(char ch, CodeModeKeys extra) { return ch == '\n' || ch == '\t' || (extra & CodeModeKeys.DeleteAutoClosed) != 0 && Openers.IndexOf(ch) >= 0; }
+        // How many times typing text[start, start+length) switches from keys back to characters, i.e. how many remote key pauses it needs.
+        public static int CountKeyPauses(string text, int start, int length, CodeModeKeys extra) { int pauses = 0; for (int i = start; i < start + length - 1; i++) if (ProducesKeys(text[i], extra) && !ProducesKeys(text[i + 1], extra)) pauses++; return pauses; }
         // Keystrokes Expand produces for text[start, start+length), without allocating; remote pacing counts keys, not characters.
         public static int CountKeys(string text, int start, int length, CodeModeKeys extra)
         {
             int escape = (extra & CodeModeKeys.EscapeBeforeEnter) != 0 ? 1 : 0, home = (extra & CodeModeKeys.HomeAfterEnter) != 0 ? 1 : 0, delete = (extra & CodeModeKeys.DeleteAutoClosed) != 0 ? 1 : 0, keys = length;
             bool dismiss = (extra & CodeModeKeys.DismissSuggestions) != 0;
             if (extra == CodeModeKeys.None) return keys;
-            for (int i = start; i < start + length; i++) { char ch = text[i]; if (ch == '\n' || ch == '\t') keys += (dismiss && Dismisses(text, i) ? 2 : 0) + escape + (ch == '\n' ? home : 0); else if (Openers.IndexOf(ch) >= 0) keys += delete; }
+            for (int i = start; i < start + length; i++) { char ch = text[i]; if (ch == '\n' || ch == '\t') keys += (dismiss && Dismisses(text, i) ? 2 : 0) + escape + (ch == '\n' ? 2 * home : 0); else if (Openers.IndexOf(ch) >= 0) keys += delete; }
             return keys;
         }
         // The character before position i is in the full text, so batch boundaries see the same context as one long batch.
@@ -69,6 +77,8 @@ namespace Paster.Core
                 {
                     if (dismiss && Dismisses(text, i)) { keys.Add(new TypedKey(KeyAction.Character, ' ', index)); keys.Add(new TypedKey(KeyAction.Backspace, '\0', index)); }
                     if (escape) keys.Add(new TypedKey(KeyAction.Escape, '\0', index));
+                    // After the popup is closed: in an open completion list End would select the last entry and Enter would accept it.
+                    if (ch == '\n' && home) keys.Add(new TypedKey(KeyAction.End, '\0', index));
                     keys.Add(new TypedKey(ch == '\n' ? KeyAction.Enter : KeyAction.Tab, '\0', index));
                     if (ch == '\n' && home) keys.Add(new TypedKey(KeyAction.Home, '\0', index));
                 }

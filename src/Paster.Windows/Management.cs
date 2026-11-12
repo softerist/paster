@@ -143,7 +143,8 @@ namespace Paster.Windows
                 AddText(fields,t,"Type on Ctrl+V in apps","TypeOnPasteApps",c.TypeOnPasteApps,(x,v)=>x.TypeOnPasteApps=v);
                 AddCheck(fields,t,"Type text copied inside remote windows","TypeRemoteCopies",c.TypeRemoteCopies,(x,v)=>x.TypeRemoteCopies=v);
                 AddNumber(fields,t,"Remote speed (keys/s, 0=max)","RemoteCharactersPerSecond",c.RemoteCharactersPerSecond,(x,v)=>x.RemoteCharactersPerSecond=v);
-                AddCheck(fields,t,"Use code mode for Ctrl+V into remote windows","CodeModeForRemotePaste",c.CodeModeForRemotePaste,(x,v)=>x.CodeModeForRemotePaste=v);
+                AddNumber(fields,t,"Pause after Enter and Tab (ms)","RemoteKeyPauseMilliseconds",c.RemoteKeyPauseMilliseconds,(x,v)=>x.RemoteKeyPauseMilliseconds=v);
+                AddCheck(fields,t,"Use code mode in remote windows","CodeModeForRemotePaste",c.CodeModeForRemotePaste,(x,v)=>x.CodeModeForRemotePaste=v);
                 t=AddPage(tabs,"Code mode");
                 AddCheck(fields,t,"Code mode: Space+Backspace before Enter and Tab (closes popups)","CodeModeDismissSuggestions",c.CodeModeDismissSuggestions,(x,v)=>x.CodeModeDismissSuggestions=v);
                 AddCheck(fields,t,"Code mode: Home after Enter","CodeModeHomeAfterEnter",c.CodeModeHomeAfterEnter,(x,v)=>x.CodeModeHomeAfterEnter=v);
