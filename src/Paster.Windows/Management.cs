@@ -141,7 +141,7 @@ namespace Paster.Windows
                 t=AddPage(tabs,"Remote windows");
                 AddCheck(fields,t,"Type on Ctrl+V in listed apps","TypeOnCtrlV",c.TypeOnCtrlV,(x,v)=>x.TypeOnCtrlV=v);
                 AddText(fields,t,"Type on Ctrl+V in apps","TypeOnPasteApps",c.TypeOnPasteApps,(x,v)=>x.TypeOnPasteApps=v);
-                AddText(fields,t,"Paste normally first in apps","PasteFirstApps",c.PasteFirstApps,(x,v)=>x.PasteFirstApps=v);
+                AddCheck(fields,t,"Paste normally where the session allows it (type only where blocked)","PasteNormallyFirst",c.PasteNormallyFirst,(x,v)=>x.PasteNormallyFirst=v);
                 AddCheck(fields,t,"Type text copied inside remote windows","TypeRemoteCopies",c.TypeRemoteCopies,(x,v)=>x.TypeRemoteCopies=v);
                 AddNumber(fields,t,"Remote speed (keys/s, 0=max)","RemoteCharactersPerSecond",c.RemoteCharactersPerSecond,(x,v)=>x.RemoteCharactersPerSecond=v);
                 AddNumber(fields,t,"Pause after Enter and Tab (ms)","RemoteKeyPauseMilliseconds",c.RemoteKeyPauseMilliseconds,(x,v)=>x.RemoteKeyPauseMilliseconds=v);

@@ -29,7 +29,11 @@ namespace Paster.Core
         [DataMember(Name="confirmAboveLines", Order=13)] public int ConfirmAboveLines = 2000;
         [DataMember(Name="promptTimeoutSeconds", Order=14)] public int PromptTimeoutSeconds = 120;
         [DataMember(Name="typeOnCtrlV", Order=15)] public bool TypeOnCtrlV = true;
-        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
+        // Remote desktop programs: Microsoft's clients, connection managers (RDCMan, mRemoteNG, Royal TS, Devolutions RDM), Hyper-V, Citrix
+        // (session window and desktop viewer), VMware Horizon (its session window process), TeamViewer, AnyDesk, VNC viewers, and the
+        // Windows 365 / Azure Virtual Desktop web client, recognized by its window title.
+        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = DefaultRemoteApps;
+        public const string DefaultRemoteApps = "mstsc.exe, msrdc.exe, RDCMan.exe, mRemoteNG.exe, RoyalTS.exe, RemoteDesktopManager.exe, RemoteDesktopManager64.exe, vmconnect.exe, wfica32.exe, CDViewer.exe, vmware-remotemks.exe, TeamViewer.exe, AnyDesk.exe, vncviewer.exe, tvnviewer.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
         [DataMember(Name="typeRemoteCopies", Order=17)] public bool TypeRemoteCopies = true;
         [DataMember(Name="codeModeForRemotePaste", Order=18)] public bool CodeModeForRemotePaste = true;
         [DataMember(Name="codeModeDismissSuggestions", Order=19)] public bool CodeModeDismissSuggestions = true;
@@ -43,9 +47,8 @@ namespace Paster.Core
         // Remote windows get characters as Unicode but Enter, Tab, and code mode's keys as keys; a remote client inside a remote session
         // delivered those keys up to about 60 ms after the characters that followed them. Characters after keys wait this long.
         [DataMember(Name="remoteKeyPauseMilliseconds", Order=26)] public int RemoteKeyPauseMilliseconds = 150;
-        // Apps whose Ctrl+V tries the session's own paste first and types only where clipboard sharing is blocked. Empty by default: a nested
-        // session inside such an app can block paste where the app's own session allows it, which Paster cannot see.
-        [DataMember(Name="pasteFirstApps", Order=27)] public string PasteFirstApps = "";
+        // Ctrl+V in a listed remote desktop program tries the session's own paste first and types only where clipboard sharing is blocked.
+        [DataMember(Name="pasteNormallyFirst", Order=27)] public bool PasteNormallyFirst = true;
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
 
@@ -72,11 +75,10 @@ namespace Paster.Core
 
         // Entries are process names (".exe" optional), optionally followed by ":" and text the window title must contain,
         // so a browser-based Remote Desktop client can be matched without capturing Ctrl+V in every browser tab.
-        // Apps that paste normally first are remote windows too: where their paste is blocked, Paster types into them the same way.
-        public bool IsTypeOnPasteApp(string processPath, string windowTitle) { return MatchesApp(TypeOnPasteApps, processPath, windowTitle) || MatchesApp(PasteFirstApps, processPath, windowTitle); }
+        public bool IsTypeOnPasteApp(string processPath, string windowTitle) { return MatchesApp(TypeOnPasteApps, processPath, windowTitle); }
         // Browser-based clients read the clipboard as soon as Ctrl+V is pressed, whether or not the session (or one nested in it) accepts
-        // the text, so a read proves nothing there: they always type, even when listed.
-        public bool IsPasteFirstApp(string processPath, string windowTitle) { return !IsBrowser(processPath) && MatchesApp(PasteFirstApps, processPath, windowTitle); }
+        // the text, so a read proves nothing there: they always type.
+        public bool IsPasteFirstApp(string processPath, string windowTitle) { return PasteNormallyFirst && !IsBrowser(processPath) && MatchesApp(TypeOnPasteApps, processPath, windowTitle); }
         private static readonly string[] Browsers = { "msedge", "chrome", "firefox", "brave", "opera", "vivaldi", "iexplore" };
         private static bool IsBrowser(string processPath) { if (String.IsNullOrEmpty(processPath)) return false; string name = StripExe(Path.GetFileName(processPath)); for (int i = 0; i < Browsers.Length; i++) if (Browsers[i].Equals(name, StringComparison.OrdinalIgnoreCase)) return true; return false; }
         private static bool MatchesApp(string list, string processPath, string windowTitle)
@@ -96,6 +98,13 @@ namespace Paster.Core
 
         // The serializer skips field initializers, so settings missing from older files would otherwise load as zero.
         [OnDeserializing] private void OnDeserializing(StreamingContext context) { CopyFrom(new PasterConfig()); }
+        // Lists that were once the default: a file still holding one exactly was never edited, so it gains the programs added since. An edited
+        // list is kept as it is.
+        private static readonly string[] PreviousDefaultRemoteApps = {
+            "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud",
+            "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud",
+            "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud" };
+        [OnDeserialized] private void OnDeserialized(StreamingContext context) { if (Array.IndexOf(PreviousDefaultRemoteApps, TypeOnPasteApps) >= 0) TypeOnPasteApps = DefaultRemoteApps; }
 
         public static PasterConfig Load(string path) { return File.Exists(path) ? TryLoad(path) ?? new PasterConfig() : new PasterConfig(); }
 
@@ -116,7 +125,13 @@ namespace Paster.Core
         public static PasterConfig TryLoad(string path, out string error)
         {
             error = null;
-            try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); c.Validate(); return c; } }
+            try
+            {
+                // Windows PowerShell 5.1 and older Notepad save UTF-8 with a byte-order mark (and Notepad's "Unicode" is UTF-16), which the JSON
+                // reader rejects as an unexpected character. The text is decoded by its byte-order mark first and read as plain UTF-8.
+                string json; using (StreamReader reader = new StreamReader(path, new UTF8Encoding(false), true)) json = reader.ReadToEnd();
+                using (MemoryStream s = new MemoryStream(new UTF8Encoding(false).GetBytes(json))) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); c.Validate(); return c; }
+            }
             catch (Exception ex) { error = FirstLine(ex.Message); return null; }
         }
         // Argument exceptions append "Parameter name: ..." on a second line.

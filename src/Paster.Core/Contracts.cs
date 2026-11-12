@@ -104,27 +104,34 @@ namespace Paster.Core
 
     // Whether a normal paste reached the session behind a window that pastes normally first.
     public enum PasteCheck { Unknown, Works, Blocked }
-    // Text: plain text only, which Paster can republish without losing anything, to watch the paste. Other: content with further formats
-    // (HTML, rich text, images, Office or editor data), which republishing the text alone would drop, so Paster leaves it untouched.
-    // Private: the source asked clipboard tools to keep no copy (password managers), so it is never republished or pasted through clipboard
-    // sharing; it is typed.
+    // Text: text that Paster can republish faithfully to watch the paste (plain data byte for byte, pictures as copies), which covers
+    // copies from editors, browsers, and Office. Other: formats only their own program understands, more than Paster keeps, or content left
+    // with the session (see PlainTextOnly). Private: the source asked clipboard tools to keep no copy (password managers), so Paster never
+    // republishes it.
     public enum ClipboardKind { Text, Other, Private }
     public enum PasteAction { Type, TryNormalPaste, PasteNormally }
-    // Remembers per remote window whether a normal paste reached its session, and decides what Ctrl+V does there. Blocked is final for the
-    // window: typing always works, and another attempt could paste the session's old clipboard again. Works is checked again with every
-    // paste of text, because the focus inside a remote session can move to a nested session that blocks clipboard sharing.
+    // Remembers per remote session (the focused window inside the client) whether a normal paste reached it, and decides what Ctrl+V does
+    // there. Blocked is final for the session: typing always works, and another attempt could paste the session's old clipboard again. Works
+    // is checked again with every paste of text (of a copy made in the remote program, plain text only), because the focus inside a session
+    // can move to a nested session that blocks sharing.
     public sealed class PasteFirstMemory
     {
         private readonly Dictionary<IntPtr, PasteCheck> checks = new Dictionary<IntPtr, PasteCheck>(); private readonly object gate = new object();
         public static PasteAction Decide(PasteCheck check, ClipboardKind kind)
         {
-            if (kind == ClipboardKind.Private || check == PasteCheck.Blocked) return PasteAction.Type;
+            if (check == PasteCheck.Blocked) return PasteAction.Type;
             if (kind == ClipboardKind.Text) return PasteAction.TryNormalPaste;
-            // Content that cannot be watched is pasted normally only where a normal paste has already been seen to work.
+            // Content that cannot be watched (private or unusual) is pasted normally only where a normal paste has already been seen to work.
             return check == PasteCheck.Works ? PasteAction.PasteNormally : PasteAction.Type;
         }
-        // The session's own clipboard may already have been pasted when Paster notices, and only the user can see whether it was.
-        public static string BlockedMessage(string program) { return "Normal paste didn't reach " + (program ?? "this window") + ": clipboard sharing is blocked there, so Ctrl+V types into it from now on. If something else was pasted, undo it (Ctrl+Z) and press Ctrl+V again."; }
+        // A copy made inside the remote desktop program (a session's own copy, which reached this PC through it) is checked again in a session
+        // known to work only when it is plain text. Richer content stays with the session, which pastes it as it would without Paster: nothing
+        // travels to this PC and back, and the program that copied keeps its own copy (Excel's copy mode). Everything else is checked.
+        public static bool PlainTextOnly(PasteCheck check, bool copiedInRemoteProgram) { return check == PasteCheck.Works && copiedInRemoteProgram; }
+        // No read means clipboard sharing is blocked, or the program inside the session does not paste with Ctrl+V (a Linux terminal); typing
+        // works in both cases. The session's own clipboard may already have been pasted, and only the user can see whether it was. Short
+        // enough to fit a Windows notification (about 160 characters) with a long program name, so the undo instruction is never cut off.
+        public static string BlockedMessage(string program) { return "Normal paste is blocked in this " + (program ?? "remote") + " session, so Ctrl+V types there. If something else appeared, press Ctrl+Z, then Ctrl+V again."; }
         // isAlive drops windows that were closed, so a window handle reused by a new window starts unchecked.
         public PasteCheck Get(IntPtr window, Func<IntPtr, bool> isAlive) { lock (gate) { PasteCheck check; if (!checks.TryGetValue(window, out check)) return PasteCheck.Unknown; if (isAlive(window)) return check; checks.Remove(window); return PasteCheck.Unknown; } }
         public void Set(IntPtr window, PasteCheck check, Func<IntPtr, bool> isAlive) { lock (gate) { List<IntPtr> closed = new List<IntPtr>(); foreach (IntPtr known in checks.Keys) if (!isAlive(known)) closed.Add(known); foreach (IntPtr gone in closed) checks.Remove(gone); checks[window] = check; } }

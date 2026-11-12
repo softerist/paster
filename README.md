@@ -1,469 +1,156 @@
 # Paster
 
-Paster is a Windows background utility that replays plain text as simulated
-keyboard input. It is intended for Remote Desktop clients, including
-browser-based ones, and local applications where normal clipboard sharing is
-unavailable in the direction you need.
+Paster makes `Ctrl+V` work in remote desktop windows. Where the remote session
+allows pasting, you get a normal paste. Where the session blocks the
+clipboard, Paster types the text for you, as if you had typed it yourself.
 
-## Quick start
-
-1. Copy text locally with the normal `Ctrl+C`.
-2. Click into the Remote Desktop window and press the normal `Ctrl+V`.
-3. Paster types the text into the remote session. Everywhere else, `Ctrl+V`
-   stays an ordinary Windows paste.
-
-`Ctrl+Shift+V` types the clipboard text into any application, and
-`Ctrl+Shift+X` cancels a running transfer.
-
-Paster runs without any visible window. When something goes wrong that you did
-not cause (a shortcut that could not be registered, an unusable settings file,
-another program taking the focus while Paster types), it shows a Windows
-notification; its icon appears in the notification area only while the
-notification is on screen. Clicking the notification opens the status. "Show
-tray icon" in the settings dialog (`--settings`) keeps the icon visible, with a
-menu for the status, settings, and exit commands; "Show notifications when
-something goes wrong" turns notifications off.
-
-## Shortcuts
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+V` in a remote-application window | Types locally copied text instead of pasting it |
-| `Ctrl+Shift+C` | Captures the current selection (sends `Ctrl+C` and keeps the text) |
-| `Ctrl+Shift+V` | Types the newest text into the foreground window, in any application |
-| `Ctrl+Shift+X` | Cancels a running transfer |
-
-Shortcut keys can be pressed in any order: the action fires on whichever key
-completes the combination, so pressing `C` slightly before `Shift` still works.
-The modifiers must match exactly, so `Ctrl+Alt+Shift+C` does not trigger
-`Ctrl+Shift+C`. Pressing a paste shortcut while text is being typed stops the
-transfer instead of starting it again.
-
-## How typing works
-
-Paster waits until the shortcut keys are physically released, then types into
-the foreground window. Typing while the keys are still held would let held or
-auto-repeating modifiers turn the typed text into application shortcuts.
-
-Paste types whichever is newer: the explicit `Ctrl+Shift+C` capture or Unicode
-text copied to the clipboard after it. If the clipboard has since changed to
-something other than text, the capture is kept. Capture and transfer operations
-cannot overlap.
-
-Text is sent in small batches, each as one atomic `SendInput` call:
-
-- In remote windows (the listed applications) every character is sent as a
-  Unicode character, so it arrives exactly regardless of the remote keyboard
-  layout, and nested sessions (a remote client inside a remote session) cannot
-  duplicate it.
-- Elsewhere, characters that need no modifier on the destination window's
-  keyboard layout (lowercase letters, digits, space) are sent as virtual keys
-  with their real scan codes, like physical keys, unless "Type all characters
-  as Unicode" (`typeAllAsUnicode`) is on.
-- Tab and line breaks are sent as the Tab and Enter keys, and CRLF line endings
-  become a single Enter press. In remote windows they are sent separately from
-  the surrounding characters, and the characters after them wait briefly, so
-  the keys cannot arrive late (see [Current limitations](#current-limitations)).
-- Everything else (uppercase letters, shifted symbols, AltGr and non-layout
-  characters) is sent as Unicode input. Paster never presses Shift, Ctrl, or
-  Alt while typing, so rapid typing cannot trigger the Sticky Keys prompt or
-  application shortcuts, locally or on the remote host.
-- Paster requests a 1 ms system timer while typing and opts out of Windows 11
-  power throttling, so short batch delays are honored even though it has no
-  visible window.
-
-## Ctrl+V in Remote Desktop
-
-Pressing the normal Windows `Ctrl+V` while a listed remote application is the
-foreground window types the clipboard text instead of pasting it, as long as
-that text was copied locally.
-
-The default list covers the Remote Desktop clients `mstsc.exe`, `msrdc.exe`,
-and Remote Desktop Connection Manager (`RDCMan.exe`), and the browser-based
-Windows 365 client in Edge or Chrome, recognized by its window title ("Windows
-App", formerly "Windows Cloud"). A settings file written before an app was
-added to the defaults keeps its own list; add the app there. Entries are
-comma-separated process names (`.exe` is optional); add `:text` to require the
-window title to contain that text (for example `msedge.exe:Windows App`), so
-other browser tabs keep their normal paste. If a browser-based remote session
-is not recognized (Ctrl+V pastes normally there, and Ctrl+Shift+V types
-without code mode), add its window title text to the list. Edit the list in the settings
-dialog; changes apply immediately, and an empty list disables the feature.
-
-Text copied inside the remote session is typed too, once it reaches the local
-clipboard (the browser client shares it; this is on by default as "Type text
-copied inside remote windows"). Paster cannot see which window inside a session
-has focus, so this is what makes `Ctrl+V` work in an `mstsc` session opened
-inside the browser session, where paste is blocked. The cost is that pasting
-inside the session itself is typed rather than pasted.
-
-`Ctrl+V` in a listed application stays a native paste when:
-
-- the clipboard holds no text (files and images pass through to the session),
-- you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
-  `Ctrl+Insert`, or `Shift+Delete`) and the copy has not reached the local
-  clipboard, which is the case when clipboard redirection is blocked, or
-- the clipboard last changed while the remote session was in front and "Type
-  text copied inside remote windows" is turned off, or
-- the application runs as administrator (Windows does not let Paster type
-  into it; see [Transfer safety and interruption](#transfer-safety-and-interruption)).
-
-Use `Ctrl+Shift+V` to type regardless (except into programs running as
-administrator).
-
-### Paste normally first (optional)
-
-Where the session's own paste sometimes works, Paster can try it first and
-type only where it is blocked. List the remote application under "Paste
-normally first in apps" (`pasteFirstApps`; same entry format, empty by
-default). `Ctrl+V` in that application then works like this:
-
-1. Paster puts the clipboard's text back on the clipboard in a way that makes
-   Windows tell it when a program reads the text, and sends the normal `Ctrl+V`.
-2. If the remote client reads the text within 3 seconds, the paste reached
-   your session (also through a nested session, which asks back through each
-   hop): done, instantly and exactly. This is checked again with every paste.
-3. If not, clipboard sharing is blocked somewhere on the way. Paster tells you,
-   and `Ctrl+V` types into that window from then on. A blocked session pastes
-   its own clipboard instead (whatever was last copied inside it), so if
-   something else appeared, undo it (`Ctrl+Z`) and press `Ctrl+V` again.
-
-Details:
-
-- Only plain text is ever put back on the clipboard (copies from Notepad,
-  Notepad++, terminals, PowerShell), so nothing is lost. Content with other
-  formats (HTML from browsers or VS Code, Office documents, images) is left
-  untouched: it is pasted normally in a window where a normal paste has
-  already been seen to work, and typed elsewhere.
-- Text marked private by password managers is always typed.
-- While Paster watches a paste, other programs (such as clipboard managers)
-  cannot read the text, so they cannot be mistaken for the remote client; the
-  re-published copy is also kept out of the Windows clipboard history.
-- Browser-based clients (Edge, Chrome, Firefox, and similar) read the clipboard
-  as soon as `Ctrl+V` is pressed, even when a nested session will reject the
-  text, so a read proves nothing there: they always type, even when listed.
-- In a window where you switch between sessions that allow and block clipboard
-  sharing (for example a nested session inside it), the first blocked paste
-  makes that window type from then on.
-- `Ctrl+Shift+V` always types. `--status` shows in how many windows the
-  normal paste works or is blocked; `--clear` and restarting Paster forget
-  them.
-
-Listed applications are also typed at the remote speed (1,000 keystrokes per
-second by default; a browser-based Windows Cloud session measured about 630
-delivered keystrokes per second at this setting and stopped immediately when
-interrupted). Remote clients accept keystrokes far faster than they can
-deliver them, and keystrokes already queued in the client or the remote session
-cannot be cancelled; pacing keeps that queue small so interruption stays
-immediate. If text keeps appearing after you interrupt a transfer, lower the
-remote speed; if interruption is immediate, you can raise it.
-
-To find the fastest speed your session keeps up with:
-
-1. Create a test text with numbered lines and copy it, for example:
-   `1..400 | ForEach-Object { 'Line {0:D4} abcdefghijklmnopqrstuvwxyz0123456789' -f $_ } | Set-Clipboard`
-   (about 20,000 characters, below the confirmation threshold).
-2. Press `Ctrl+V` in an empty remote editor and click once after a few seconds.
-3. Note the last line that appears. If typing stopped within a line or two of
-   the click, raise the remote speed in the settings dialog (for example 1,000,
-   2,000) and repeat. If many more lines keep appearing after the click,
-   the session is slower than the setting: go back to the last speed that
-   stopped immediately.
-
-Limitations:
-
-- Paster cannot tell whether a native paste succeeded, so the choice is made by
-  destination application and clipboard origin, not by trying a paste first.
-- A copy made inside the remote session with the mouse (context menu) is not
-  detected; use `Ctrl+C` there or copy locally.
-- Copying from the remote session to the local machine is not possible when
-  clipboard redirection is blocked, because the copied text stays on the remote
-  clipboard.
-- A full-screen session that forwards Windows key combinations to the remote
-  computer (or a browser in full screen that locks the keyboard) may receive
-  keys before Paster sees them. In `mstsc`, set "Apply Windows key
-  combinations" to "On this computer" if `Ctrl+V` or key interruption stops
-  working in full screen.
-
-### Code mode
-
-Code editors such as VS Code and Notepad++ react to typed keys: they add
-indentation after Enter, insert closing brackets and quotes, and accept
-autocomplete or inline suggestions on Enter and Tab. Typed code then arrives
-with doubled indentation, extra brackets, or replaced words. Paster cannot see
-which application is focused inside a remote session, so it types into remote
-windows in code mode, whether `Ctrl+V` or `Ctrl+Shift+V` started the paste (on
-by default; each key can be turned on or off in the settings dialog):
-
-- **Space, then Backspace** before each Enter and Tab (on by default, skipped
-  after whitespace) ends the current word, so suggestion popups such as
-  Notepad++ word completion or VS Code IntelliSense close instead of Enter or
-  Tab accepting a suggestion and swallowing the line break. The space is
-  removed again, so terminals, documents, and spreadsheet cells are unchanged.
-- **Home** after each Enter (on by default) moves before any auto-inserted
-  indentation, so the line's own indentation is typed exactly. The editor's
-  indentation ends up at the end of the line, so **End** is pressed before each
-  Enter: otherwise Enter would carry that indentation to the next line, where a
-  smart Home (Notepad++, VS Code) stops after it and every second line gains
-  indentation. Lines can therefore keep trailing whitespace in editors that do
-  not remove it. Neither key removes existing text, so both are safe in
-  terminals, documents, and chats.
-- **Escape** before each Enter and Tab (off by default) also closes suggestion
-  popups, including inline (ghost text) suggestions. It also clears the current line in
-  PowerShell and cmd, cancels spreadsheet cell edits, and can close dialogs, so
-  turn it on only if you paste mainly into code editors.
-- **Delete** after each `(`, `[`, `{`, `"`, `'`, and `` ` `` (off by default)
-  removes a closing character the editor inserted automatically. It assumes you
-  are typing at the end of a document into an editor that auto-closes (VS Code
-  does; Notepad++ does not by default); anywhere else it deletes the next
-  character of existing text.
-
-In local windows, `Ctrl+Shift+V` types plain text without code mode. Editors
-that auto-close HTML tags are not covered.
-
-## Transfer safety and interruption
-
-The destination is the local foreground window at the moment transfer starts.
-Paster stops the transfer when any of the following occurs:
-
-- The cancel shortcut (`Ctrl+Shift+X` by default) is pressed.
-- A physical keyboard key or mouse button is pressed. Paster's own simulated
-  keystrokes are never mistaken for user input, and while a paste runs every
-  physical click is counted, so even a quick touchpad tap stops it.
-- The local foreground window changes.
-- Windows rejects simulated input.
-- The application exits.
-
-What you do yourself stays quiet: a key press, a click, the cancel shortcut,
-declining a prompt, or switching to another window (any key press or click
-within the second before the focus changed counts as yours, even with "Stop
-typing on key press or click" off). When the focus moves without any input from
-you, another program took it (a chat notification, a dialog, an app activating
-itself); Paster then names that program and says how much was typed, for
-example "Typing stopped because Microsoft Teams took the focus (1,200 of 5,000
-characters typed)". Large transfers can be resumed by pasting again in the
-original window. Every stop, quiet or not, appears in `--status` as the last
-error.
-
-Windows silently discards simulated input sent to a program running as
-administrator (while Paster itself is not), so Paster checks the destination
-first:
-
-- `Ctrl+V` in a listed remote application running as administrator stays a
-  normal paste, which Windows allows.
-- `Ctrl+Shift+V` into any program running as administrator types nothing and
-  reports it, suggesting `Ctrl+V` instead. Run Paster as administrator to type
-  into elevated programs.
-
-An interrupted or failed transfer keeps the valid captured text in memory. A
-failed capture clears the previous capture to prevent stale text from being
-transferred.
-
-Texts with more than 2,000 lines (configurable; 0 turns it off) are handled as
-large transfers. Shorter texts are never interrupted by a prompt and always type
-from the start.
-
-- Before typing, a large transfer asks for confirmation, showing the line and
-  character counts and the expected duration (remote windows use the remote
-  speed for the estimate).
-- If a large transfer is interrupted, Paster remembers how many characters were
-  typed. Pasting the same text again asks whether to **Resume** from that
-  point, **Start over**, or cancel. Pasting different text, a completed
-  transfer, or `--clear` discards the resume point. Characters already sent
-  before an interruption count as typed, because input that has left Paster
-  cannot be recalled.
-- Choosing **Type** or **Resume** returns focus to the destination window and
-  waits for the answering key or mouse button to be released before typing
-  starts. The cancel shortcut closes the prompt, and an unanswered prompt
-  cancels itself after two minutes.
-
-Paster works with a Remote Desktop window while that window remains the local
-foreground window and the client accepts simulated keyboard input. You can
-change focus between applications inside the remote desktop because Paster can
-only observe the local client window, not the remote window hierarchy.
-Minimizing the client or switching to another local application stops the
-transfer: Windows `SendInput` targets the active input session rather than a
-particular background window.
-
-## Safety and privacy
-
-Paster has no network access, telemetry, captured-text log, keystroke log, or
-persistent clipboard history. Captured text is held only in memory and is
-discarded when the process exits. Operational status never displays captured
-text.
-
-Paster runs without elevation and uses Windows global hotkeys, a low-level
-keyboard hook, a clipboard-change listener, the `SendInput` API, a per-session
-named mutex, and a per-session local management pipe. The keyboard hook only checks for
-Paster's shortcuts, copy keys pressed in a remote window, and user
-interruptions; it does not record keystrokes. Windows silently removes a
-low-level hook that once responds too slowly (for example under heavy load or
-while resuming from sleep), so Paster re-installs it every minute and after
-resume, unlock, and session reconnect. While a paste runs, and only then, a
-low-level mouse hook counts physical clicks; it records no positions. To
-recognize remote applications,
-Paster reads the foreground window's process name and title, but only when a
-paste or copy shortcut is pressed, a transfer starts, or the clipboard changes.
-Notifications name programs by their description (such as "Microsoft Teams"),
-never by window title, so document names and message subjects stay out of
-them. It cannot confirm
-that a destination, especially a remote application, accepted every simulated
-key.
-
-## Build and test
-
-The repository uses the C# compiler included with Windows and the .NET
-Framework 4.x base class library. No package manager or network access is
-required.
-
-```powershell
-.\build.ps1 -RunTests
-```
-
-This creates `dist\paster.exe` as a GUI-subsystem executable and runs the
-dependency-free core test harness.
+Paster runs quietly in the background on Windows 10 and 11. In all other
+windows, `Ctrl+V` stays a normal paste.
 
 ## Install
 
+1. Get the Paster folder (download it from GitHub or clone it).
+2. Open PowerShell in that folder and run:
+
+   ```powershell
+   .\setup.ps1
+   ```
+
+   If PowerShell says that running scripts is disabled, run this instead:
+   `powershell -ExecutionPolicy Bypass -File .\setup.ps1`
+
+Paster starts right away and starts again each time you sign in. It has no
+window of its own; you can find it as "paster" in Task Manager. No extra
+software is needed.
+
+To update, run `.\setup.ps1` again. To remove Paster, run `.\uninstall.ps1`.
+
+## Everyday use
+
+1. Copy something on your computer with `Ctrl+C`, from any program.
+2. Click into the remote desktop window where you want it.
+3. Press `Ctrl+V`.
+
+Paster finds out by itself whether the session accepts a normal paste:
+
+- **If it does**, you get a normal paste: instant, and with formatting and
+  pictures wherever the program supports them.
+- **If it doesn't**, Paster shows a short message the first time (within about
+  3 seconds) and types the text in that session from then on. The session may
+  have pasted something else first (whatever was last copied inside it). If
+  so, press `Ctrl+Z`, then `Ctrl+V` again.
+
+Each session is checked on its own, so a program that shows several sessions
+in one window (such as RDCMan) can paste normally in one session and type in
+another.
+
+| Keys | What it does |
+| --- | --- |
+| `Ctrl+V` in a remote desktop window | Pastes normally, or types where pasting is blocked |
+| `Ctrl+Shift+V` | Always types the copied text, in any window |
+| `Ctrl+Shift+X` | Stops typing |
+| `Ctrl+Shift+C` | Copies the selected text and keeps it for typing |
+
+Typing also stops as soon as you press a key, click, or switch to another
+window.
+
+### Which windows count as remote desktop windows
+
+These work out of the box:
+
+- Remote Desktop Connection (`mstsc`)
+- The Remote Desktop and Windows App desktop clients (`msrdc`)
+- Remote Desktop Connection Manager (`RDCMan`), mRemoteNG, Royal TS, and
+  Devolutions Remote Desktop Manager
+- Hyper-V virtual machine windows
+- Citrix Workspace and VMware Horizon
+- TeamViewer and AnyDesk
+- VNC viewers (RealVNC, TigerVNC, TightVNC)
+- Windows 365 and Azure Virtual Desktop in Edge or Chrome (the window titled
+  "Windows App" or "Windows Cloud"). In a browser, Paster can't tell whether a
+  normal paste reached the session, so `Ctrl+V` always types there.
+
+If you installed an earlier version and never changed this list, it is
+updated automatically. You can add other programs in the settings, see
+[Adding a program](#adding-a-program).
+
+## Good to know
+
+- **Long texts:** Before typing more than 2,000 lines, Paster asks first and
+  shows how long it will take. If typing gets interrupted, paste the same text
+  again to continue where it stopped.
+- **Code:** In remote windows, Paster types so that code editors such as
+  VS Code and Notepad++ don't add extra indentation, extra closing brackets,
+  or autocomplete suggestions.
+- **Speed:** Remote windows are typed at about 1,000 keystrokes per second. If
+  text keeps appearing after you stop it, lower "Remote speed" in the settings.
+- **Remote desktop inside a remote desktop:** Paster sees only the outer
+  window, so a session opened inside another session shares its result. If
+  the inner session blocks pasting, `Ctrl+V` types in the outer one too. To
+  let Paster check again, close that session window or run
+  `& "$env:LOCALAPPDATA\Paster\paster.exe" --clear`. If typed lines come out in
+  the wrong order there, raise "Pause after Enter and Tab" in the settings.
+- **Passwords:** Paster never makes its own copy of text from a password
+  manager. Where a normal paste already worked, `Ctrl+V` pastes it normally;
+  anywhere else, Paster types it.
+- **Keyboard layout:** A different keyboard layout on the remote computer is no
+  problem; remote windows always get the exact characters.
+- **Programs running as administrator:** Paster can't type into these. Use a
+  normal `Ctrl+V` there instead.
+
+## When something goes wrong
+
+Paster shows a Windows notification when something unexpected happens, for
+example when another program takes the focus while Paster is typing, or when a
+setting can't be used. Click the notification to see the details.
+
+If `Ctrl+V` pastes the wrong thing or nothing at all in a session, use
+`Ctrl+Shift+V`: it always types.
+
+To check on Paster at any time, run:
+
 ```powershell
-.\setup.ps1
+& "$env:LOCALAPPDATA\Paster\paster.exe" --status
 ```
 
-Setup installs and immediately starts a stable per-user copy in
-`%LOCALAPPDATA%\Paster`, then registers it in the current user's Run key for
-future sign-ins. Paster has no taskbar entry or normal application window; by
-default it appears only as a background process in Task Manager, and its
-notification-area icon shows only while a notification is on screen. "Show
-tray icon" keeps the icon visible.
+## Settings
 
-Every setup run builds the current source, gracefully stops any running Paster
-instance (forcing termination only if it does not exit), replaces the installed
-executable, and starts that newly built version.
-
-## Configuration
-
-Settings live in `%LOCALAPPDATA%\Paster\settings.json`. When Paster starts it
-writes the file with every option (one per line) if it is missing, and adds any
-options introduced since the file was written. A file that cannot be read or
-contains invalid values is never overwritten at startup; Paster runs with the
-defaults instead, so fix the file and restart. The settings dialog starts from
-the file's current values, so edits made by hand while Paster runs are kept
-when you save there.
-
-| JSON key | Settings dialog | Default | Range or values |
-| --- | --- | --- | --- |
-| `captureShortcut` | Capture shortcut | `Ctrl+Shift+C` | Shortcut |
-| `pasteShortcut` | Paste shortcut | `Ctrl+Shift+V` | Shortcut |
-| `cancelShortcut` | Cancel shortcut | `Ctrl+Shift+X` | Shortcut |
-| `anyOrderShortcuts` | Shortcuts work in any key order | `true` | `false`: the key must be pressed last |
-| `startDelayMilliseconds` | Start delay (ms) | `0` | 0-60,000 |
-| `characterDelayMilliseconds` | Delay per batch (ms) | `2` | 0-60,000 |
-| `charactersPerBatch` | Characters per batch | `32` | 1-4,096 |
-| `typeShiftedAsUnicode` | Type uppercase and symbols as Unicode | `true` | `false`: type them with Shift (can trigger Sticky Keys) |
-| `typeAllAsUnicode` | Type all characters as Unicode (any keyboard layout) | `false` | `true`: letters and digits are layout-independent in local windows too (remote windows always get Unicode) |
-| `stopOnUserInput` | Stop typing on key press or click | `true` | `false`: only the cancel shortcut and focus changes stop typing |
-| `clipboardTimeoutMilliseconds` | Clipboard timeout (ms) | `2000` | 100-120,000 |
-| `maximumTextCharacters` | Maximum characters | `16777216` | 1-268,435,456 |
-| `confirmAboveLines` | Confirm pastes over (lines) | `2000` | 0 (never confirm or resume)-100,000,000 |
-| `promptTimeoutSeconds` | Prompt timeout (s) | `120` | 10-3,600 |
-| `typeOnCtrlV` | Type on Ctrl+V in listed apps | `true` | `false`: `Ctrl+V` is never intercepted |
-| `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
-| `pasteFirstApps` | Paste normally first in apps | empty | Comma-separated `process[:title text]`; `Ctrl+V` tries the session's own paste first (browsers excluded) |
-| `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
-| `codeModeForRemotePaste` | Use code mode in remote windows | `true` | Applies to `Ctrl+V` and `Ctrl+Shift+V`; `false`: plain typing |
-| `codeModeDismissSuggestions` | Code mode: Space+Backspace before Enter and Tab | `true` | Closes suggestion popups without removing text |
-| `codeModeEscapeBeforeEnter` | Code mode: Escape before Enter and Tab | `false` | Clears terminal lines and cancels spreadsheet cell edits |
-| `codeModeHomeAfterEnter` | Code mode: Home after Enter | `true` | |
-| `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `false` | Only safe when typing at the end of a document into an editor that auto-closes |
-| `remoteCharactersPerSecond` | Remote speed (keys/s) | `1000` | Keystrokes per second; 0 (unlimited)-100,000 |
-| `remoteKeyPauseMilliseconds` | Pause after Enter and Tab (ms) | `150` | 0-1,000; raise it if lines still arrive out of order in a nested session, 0 turns it off |
-| `showTrayIcon` | Show tray icon | `false` | `true`: the notification-area icon (with its menu) stays visible; when off, it appears only while a notification is shown |
-| `showNotifications` | Show notifications when something goes wrong | `true` | `false`: no notifications; failures appear only in `--status` |
-
-Shortcut combinations must be distinct and contain at least one modifier plus
-one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
-`Ctrl`, `Alt`, `Shift`, and `Win`. If a local destination drops characters,
-lower the batch size or raise the delay per batch.
-
-Open the settings dialog with `--settings` or from the tray icon. It validates
-all values before saving; an invalid value keeps the dialog open and names the
-field. Saved changes, shortcuts included, apply to the running process at once.
-Edits made directly to `settings.json` take effect after Paster restarts or
-when you save the settings dialog. If the file cannot be used at startup,
-Paster runs with the defaults and reports why. The remote
-speed counts keystrokes, so code mode's extra keys are paced too. With
-`typeShiftedAsUnicode` off, letters typed with Shift come out in the wrong case
-while Caps Lock is on.
-
-## Management commands
-
-Run the installed executable with one of these explicit commands:
+Open the settings with:
 
 ```powershell
 & "$env:LOCALAPPDATA\Paster\paster.exe" --settings
-& "$env:LOCALAPPDATA\Paster\paster.exe" --status
-& "$env:LOCALAPPDATA\Paster\paster.exe" --clear
-& "$env:LOCALAPPDATA\Paster\paster.exe" --exit
-& "$env:LOCALAPPDATA\Paster\paster.exe" --enable-autostart
-& "$env:LOCALAPPDATA\Paster\paster.exe" --disable-autostart
 ```
 
-`--status` reports whether a capture exists, whether transfer is active,
-whether Windows accepted the last simulated input, the current target-window
-handle, the
-resume point of an interrupted transfer, and the latest error; with "Paste
-normally first" apps listed, also in how many windows the normal paste works
-or is blocked. `--clear` removes the in-memory capture and resume point and
-forgets those windows.
+Changes apply right away. The settings you're most likely to need:
 
-## Remove
+| Setting | Tab | What it's for |
+| --- | --- | --- |
+| Type on Ctrl+V in apps | Remote windows | The programs where `Ctrl+V` is handled by Paster |
+| Paste normally where the session allows it | Remote windows | Turn it off to always type in those programs |
+| Remote speed | Remote windows | Lower it if text keeps coming after you stop typing |
+| Pause after Enter and Tab | Remote windows | Raise it if lines get mixed up in a nested session |
+| Stop typing on key press or click | General | Turn it off if your own typing shouldn't stop Paster |
+| Show tray icon | General | Keeps Paster's icon next to the clock |
+| Show notifications when something goes wrong | General | Turn it off to hide notifications |
+| Type all characters as Unicode | Typing | Turn it on if a program on your own computer gets wrong characters |
 
-```powershell
-.\uninstall.ps1
-```
+### Adding a program
 
-Uninstall disables the per-user Run entry, asks a running instance to exit
-(and stops the installed copy if it has not exited after five seconds, since it
-keeps its executable locked), and removes the installed executable and configuration from the exact install
-directory. It does not remove unrelated user files.
+In "Type on Ctrl+V in apps", add the program's file name, separated from the
+others by a comma, for example `myremote.exe`. For a remote desktop that runs
+in a browser, add the browser and part of the window title, for example
+`msedge.exe:My Remote Desktop`. That way, other browser tabs keep their normal
+paste.
 
-## Current limitations
+## Privacy
 
-- Windows 10/11 interactive user sessions are the supported environment.
-- Unicode `SendInput` handling depends on the destination application; a few
-  older console programs and games ignore Unicode input.
-- In local windows, lowercase letters, digits, and unshifted punctuation are
-  sent as keys of the destination window's keyboard layout; turn on "Type all
-  characters as Unicode" if a local program interprets them with a different
-  layout. Remote windows always receive Unicode characters.
-- Tab, Enter, and code mode's extra keys are always sent as keys, in remote
-  windows too: most programs do not treat a Unicode line break or tab as the
-  Enter or Tab key. Keys and Unicode characters can travel separately through
-  a nested session, and keys were seen arriving up to about 60 ms after the
-  characters typed next, so in remote windows the characters after Enter or
-  Tab wait 150 ms (`remoteKeyPauseMilliseconds`), about 7 seconds for a
-  50-line paste. If a nested session still mixes up lines, raise it; for a
-  single remote session that never does, it can be lowered.
-- If Windows rejects simulated input (a UAC prompt or the lock screen during a
-  transfer), that transfer stops and keeps its resume point; the next paste
-  tries again.
-- Clipboard ownership and Windows permission policy can prevent capture or
-  simulated input.
-- Local foreground monitoring cannot detect focus changes inside a remote
-  session.
-- Very large texts are practical only locally: at the default remote speed,
-  16 million characters take about 9 hours. For bulk data, use file transfer
-  or drive redirection instead.
-- Simulated typing preserves plain-text structure where supported, but does not
-  guarantee identical bytes, encoding, or newline conventions. Editors that
-  auto-indent or auto-close brackets may alter typed code.
+Paster works only on your computer. It has no network access, keeps copied
+text only in memory while it runs, and doesn't record your keystrokes. To see
+whether a normal paste reaches a session, Paster briefly puts an exact copy of
+what you copied back on the clipboard; that copy is kept out of the Windows
+clipboard history.
 
-Core tests cover structured text, tabs, blank lines, punctuation, Unicode,
-batching and line-ending normalization, surrogate pairs, size limits, settings
-validation and migration, stale-capture clearing, newest-text selection,
-interruption and cancellation, foreground changes, shortcut validation,
-remote-application matching, remote pacing, resume points, confirmation
-prompts, capture preservation, overlapping-operation prevention, blocked
-(elevated) destinations, which failures are reported, and telling your own
-window switches from another program taking the focus. Windows integration (hotkeys, the keyboard
-hook, and input injection) still depends on the live desktop environment.
+## More details
+
+[TECHNICAL.md](TECHNICAL.md) explains how Paster works, every setting, all
+command-line options, building from source, and known limitations.
