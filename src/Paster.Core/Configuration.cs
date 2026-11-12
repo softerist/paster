@@ -29,7 +29,7 @@ namespace Paster.Core
         [DataMember(Name="confirmAboveLines", Order=13)] public int ConfirmAboveLines = 2000;
         [DataMember(Name="promptTimeoutSeconds", Order=14)] public int PromptTimeoutSeconds = 120;
         [DataMember(Name="typeOnCtrlV", Order=15)] public bool TypeOnCtrlV = true;
-        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
+        [DataMember(Name="typeOnPasteApps", Order=16)] public string TypeOnPasteApps = "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud";
         [DataMember(Name="typeRemoteCopies", Order=17)] public bool TypeRemoteCopies = true;
         [DataMember(Name="codeModeForRemotePaste", Order=18)] public bool CodeModeForRemotePaste = true;
         [DataMember(Name="codeModeDismissSuggestions", Order=19)] public bool CodeModeDismissSuggestions = true;
@@ -37,6 +37,9 @@ namespace Paster.Core
         [DataMember(Name="codeModeHomeAfterEnter", Order=21)] public bool CodeModeHomeAfterEnter = true;
         [DataMember(Name="codeModeDeleteAutoClosed", Order=22)] public bool CodeModeDeleteAutoClosed = false;
         [DataMember(Name="remoteCharactersPerSecond", Order=23)] public int RemoteCharactersPerSecond = 1000;
+        [DataMember(Name="showTrayIcon", Order=24)] public bool ShowTrayIcon = false;
+        // Independent of the tray icon: without a permanent icon, Paster shows its icon only while a notification is on screen.
+        [DataMember(Name="showNotifications", Order=25)] public bool ShowNotifications = true;
 
         public const int MaximumTextLimit = 256 * 1024 * 1024;
 
@@ -45,10 +48,10 @@ namespace Paster.Core
             Shortcut capture = Shortcut.Parse(CaptureShortcut); Shortcut paste = Shortcut.Parse(PasteShortcut); Shortcut cancel = Shortcut.Parse(CancelShortcut);
             if (capture.Modifiers == paste.Modifiers && capture.Key == paste.Key || capture.Modifiers == cancel.Modifiers && capture.Key == cancel.Key || paste.Modifiers == cancel.Modifiers && paste.Key == cancel.Key)
                 throw new FormatException("Capture, paste, and cancel shortcuts must be different.");
-            if (StartDelayMilliseconds < 0 || StartDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("StartDelayMilliseconds");
+            if (StartDelayMilliseconds < 0 || StartDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("StartDelayMilliseconds", "Start delay must be between 0 and 60000 milliseconds.");
             if (CharacterDelayMilliseconds < 0 || CharacterDelayMilliseconds > 60000) throw new ArgumentOutOfRangeException("CharacterDelayMilliseconds", "Batch delay must be between 0 and 60000 milliseconds.");
             if (CharactersPerBatch < 1 || CharactersPerBatch > 4096) throw new ArgumentOutOfRangeException("CharactersPerBatch", "Characters per batch must be between 1 and 4096.");
-            if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds");
+            if (ClipboardTimeoutMilliseconds < 100 || ClipboardTimeoutMilliseconds > 120000) throw new ArgumentOutOfRangeException("ClipboardTimeoutMilliseconds", "Clipboard timeout must be between 100 and 120000 milliseconds.");
             if (RemoteCharactersPerSecond < 0 || RemoteCharactersPerSecond > 100000) throw new ArgumentOutOfRangeException("RemoteCharactersPerSecond", "Remote speed must be between 0 (unlimited) and 100000 characters per second.");
             if (MaximumTextCharacters < 1 || MaximumTextCharacters > MaximumTextLimit) throw new ArgumentOutOfRangeException("MaximumTextCharacters", "Maximum characters must be between 1 and " + MaximumTextLimit.ToString("N0") + ".");
             if (PromptTimeoutSeconds < 10 || PromptTimeoutSeconds > 3600) throw new ArgumentOutOfRangeException("PromptTimeoutSeconds", "Prompt timeout must be between 10 and 3600 seconds.");
@@ -84,20 +87,26 @@ namespace Paster.Core
 
         // Leaves a complete settings file behind so every option is visible and editable: a missing file gets the defaults and a readable
         // one gains options added since it was written. An unreadable or invalid file is left untouched, so a typo never wipes the settings.
-        public static PasterConfig LoadOrCreate(string path)
+        public static PasterConfig LoadOrCreate(string path) { string ignored; return LoadOrCreate(path, out ignored); }
+        // error explains why an existing file was not used (null when it was), so the running process can tell the user it fell back to defaults.
+        public static PasterConfig LoadOrCreate(string path, out string error)
         {
-            PasterConfig c = File.Exists(path) ? TryLoad(path) : new PasterConfig();
-            if (c == null) return new PasterConfig();
+            error = null; PasterConfig c = File.Exists(path) ? TryLoad(path, out error) : new PasterConfig();
+            if (c == null) { error = "The settings file could not be used (" + error + "). Paster is running with the default settings until the file is fixed or saved from the settings dialog."; return new PasterConfig(); }
             try { c.Save(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             return c;
         }
 
         // Null when the file is missing, unreadable, or holds invalid values.
-        public static PasterConfig TryLoad(string path)
+        public static PasterConfig TryLoad(string path) { string ignored; return TryLoad(path, out ignored); }
+        public static PasterConfig TryLoad(string path, out string error)
         {
-            try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); if (c.StartDelayMilliseconds == 250) c.StartDelayMilliseconds = 0; c.Validate(); return c; } }
-            catch { return null; }
+            error = null;
+            try { using (FileStream s = File.OpenRead(path)) { PasterConfig c = (PasterConfig)new DataContractJsonSerializer(typeof(PasterConfig)).ReadObject(s); c.Validate(); return c; } }
+            catch (Exception ex) { error = FirstLine(ex.Message); return null; }
         }
+        // Argument exceptions append "Parameter name: ..." on a second line.
+        public static string FirstLine(string message) { int end = message.IndexOfAny(new char[] { '\r', '\n' }); return end >= 0 ? message.Substring(0, end) : message; }
 
         public void Save(string path)
         {

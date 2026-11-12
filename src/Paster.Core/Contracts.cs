@@ -15,6 +15,12 @@ namespace Paster.Core
         bool IsInputAvailable { get; }
         bool IsUserInterruptionRequested { get; }
         bool IsRemoteWindow(IntPtr window);
+        // True when Windows would silently discard simulated input to the window (it runs at a higher integrity level, e.g. as administrator).
+        bool IsInputBlocked(IntPtr window);
+        // True when the user physically pressed a key or mouse button within the last second, counting only input after typing was set up.
+        bool HasRecentUserInput { get; }
+        // A short, user-facing name of the program that owns the window (such as "Microsoft Teams"), or null when it cannot be determined.
+        string DescribeWindow(IntPtr window);
         // Asks the user before a long or resumable transfer. A non-cancel answer must return focus to prompt.TargetWindow.
         TransferChoice ConfirmTransfer(TransferPrompt prompt);
     }

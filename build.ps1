@@ -33,7 +33,8 @@ $sources = @(
     (Join-Path $root 'src\Paster.Core\TransferCoordinator.cs'),
     (Join-Path $root 'src\Paster.Windows\Program.cs'),
     (Join-Path $root 'src\Paster.Windows\WindowsPlatform.cs'),
-    (Join-Path $root 'src\Paster.Windows\Management.cs')
+    (Join-Path $root 'src\Paster.Windows\Management.cs'),
+    (Join-Path $root 'src\Paster.Windows\Integrity.cs')
 )
 foreach ($source in $sources) { if (-not (Test-Path -LiteralPath $source)) { throw "Missing source: $source" } }
 

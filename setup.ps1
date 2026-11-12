@@ -8,7 +8,9 @@ $binary = Join-Path $root 'dist\paster.exe'
 & (Join-Path $root 'build.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 $installedBinary = Join-Path $InstallRoot 'paster.exe'
-$running = @(Get-Process -Name 'Paster' -ErrorAction SilentlyContinue)
+# Only this session's instance: other users' instances are theirs, and stopping them would fail.
+$session = (Get-Process -Id $PID).SessionId
+$running = @(Get-Process -Name 'Paster' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })
 if ($running.Count -gt 0) {
     & $binary --exit
     foreach ($process in $running) {

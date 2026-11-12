@@ -8,6 +8,12 @@ namespace Paster.Core
     {
         private readonly ITextCapturePlatform platform; private readonly IClock clock; private readonly PasterConfig config;
         private readonly object gate = new object(); private string captured; private CancellationTokenSource cancellation; private string lastError; private bool captureInProgress; private IntPtr transferTarget; private uint capturedSequence; private string resumeText; private int resumeOffset;
+        // Native paste still works in elevated programs (the clipboard is shared); only simulated typing is blocked.
+        public static string BlockedMessage(string program) { return "Windows doesn't let Paster type into " + (program ?? "this window") + " because it runs as administrator. Press Ctrl+V to paste there instead, or run Paster as administrator."; }
+        public const string SwitchedWindowMessage = "Typing stopped because you switched to another window.";
+        // Raised for failures the user did not cause (not for cancellations, interruptions, declined prompts, or overlapping shortcut presses),
+        // on the failing thread (a worker): handlers must not block it.
+        public event Action<string> Failed;
         public TransferCoordinator(ITextCapturePlatform p, IClock c, PasterConfig cfg) { platform = p; clock = c; config = cfg; config.Validate(); }
         public TransferStatus Status { get { lock (gate) { return new TransferStatus { HasCapture = captured != null, IsTransferring = cancellation != null, IsInputAvailable = platform.IsInputAvailable, LastError = lastError, TargetWindow = transferTarget, ResumeOffset = resumeOffset, ResumeTotal = resumeText == null ? 0 : resumeText.Length }; } } }
         public void Clear() { lock (gate) { captured = null; resumeText = null; resumeOffset = 0; } }
@@ -31,20 +37,24 @@ namespace Paster.Core
             // The clipboard is read outside the lock: a clipboard owned by a remote session can take seconds to render, and Status callers must not wait on it.
             uint sequence = platform.ClipboardSequence; bool useClipboard; lock (gate) { useClipboard = captured == null || sequence != capturedSequence; }
             string clipboard = null; if (useClipboard) platform.TryReadClipboard(out clipboard);
+            // Windows discards input to a higher-integrity window while SendInput still reports success, so the transfer would look complete.
+            IntPtr foreground = platform.ForegroundWindow; bool blocked = platform.IsInputBlocked(foreground); string blockedMessage = blocked ? BlockedMessage(platform.DescribeWindow(foreground)) : null, error = null;
             lock (gate)
             {
-                if (captureInProgress) return Fail("A capture is still in progress.", false);
-                if (cancellation != null) return Fail("A transfer is already in progress.", false);
+                if (captureInProgress) return Reject("A capture is still in progress.");
+                if (cancellation != null) return Reject("A transfer is already in progress.");
                 // No gate on an earlier input rejection (UAC prompt, lock screen): each transfer tries again, so Paster recovers by itself.
                 // Whichever is newer wins: text copied normally after a capture replaces it, so plain Ctrl+C works as the copy step.
                 text = captured;
                 if (useClipboard || text == null)
                 {
-                    if (clipboard != null) { if (clipboard.Length > config.MaximumTextCharacters) return Fail("Clipboard text exceeds the configured size limit.", false); text = clipboard; }
-                    else if (text == null) return Fail("No captured text or clipboard text is available.", false);
+                    if (clipboard != null) { if (clipboard.Length > config.MaximumTextCharacters) error = "Clipboard text exceeds the configured size limit."; else text = clipboard; }
+                    else if (text == null) error = "No captured text or clipboard text is available.";
                 }
-                cancellation = new CancellationTokenSource(); transferTarget = platform.ForegroundWindow; lastError = null;
+                if (error == null && blocked) error = blockedMessage;
+                if (error == null) { cancellation = new CancellationTokenSource(); transferTarget = foreground; lastError = null; }
             }
+            if (error != null) return Fail(error, false);
             IntPtr target; CancellationToken token; lock (gate) { target = transferTarget; token = cancellation.Token; }
             if (text.IndexOf('\r') >= 0) text = text.Replace("\r\n", "\n").Replace('\r', '\n');
             // Remote clients consume input far slower than SendInput accepts it; anything sent ahead of them queues up where cancellation
@@ -55,11 +65,11 @@ namespace Paster.Core
             int offset = 0, sent = 0; long keysSent = 0;
             try
             {
-                offset = ChooseStart(text, lines, large, target, remote, rate, batchSize, codeMode, token); if (offset < 0) { Fail("Transfer cancelled.", false); return false; } sent = offset;
-                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); if (platform.ForegroundWindow != target) throw new InvalidOperationException("Foreground target changed."); int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; try { if (!platform.SendText(text, i, length, codeMode)) throw new InvalidOperationException("Windows input rejected a text batch."); } catch (InputRejectedException rejected) { sent = i + rejected.CharactersSent; if (sent > 0 && sent < text.Length && Char.IsLowSurrogate(text[sent])) sent--; throw; } keysSent += CodeTyping.CountKeys(text, i, length, codeMode); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, keysSent * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
+                offset = ChooseStart(text, lines, large, target, remote, rate, batchSize, codeMode, token); if (offset < 0) return Reject("Transfer cancelled."); sent = offset;
+                clock.Sleep(config.StartDelayMilliseconds, token); paced.Restart(); for (int i = offset; i < text.Length; ) { token.ThrowIfCancellationRequested(); if (platform.IsUserInterruptionRequested) throw new OperationCanceledException("Transfer interrupted by keyboard or mouse input."); IntPtr focused = platform.ForegroundWindow; if (focused != target) { if (platform.HasRecentUserInput) throw new OperationCanceledException(SwitchedWindowMessage); throw new InvalidOperationException(FocusLostMessage(focused, target, i, text.Length, large)); } int length = Math.Min(batchSize, text.Length - i); if (i + length < text.Length && Char.IsHighSurrogate(text[i + length - 1])) length++; try { if (!platform.SendText(text, i, length, codeMode)) throw new InvalidOperationException("Windows input rejected a text batch."); } catch (InputRejectedException rejected) { sent = i + rejected.CharactersSent; if (sent > 0 && sent < text.Length && Char.IsLowSurrogate(text[sent])) sent--; throw; } keysSent += CodeTyping.CountKeys(text, i, length, codeMode); i += length; sent = i; int wait = config.CharacterDelayMilliseconds; if (rate > 0) wait = (int)Math.Max(wait, keysSent * 1000 / rate - paced.ElapsedMilliseconds); clock.Sleep(wait, token); }
                 lock (gate) { resumeText = null; resumeOffset = 0; } return true;
             }
-            catch (OperationCanceledException) { if (large) SaveResumePoint(text, sent); Fail("Transfer cancelled.", false); return false; } catch (Exception ex) { if (large) SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
+            catch (OperationCanceledException ex) { if (large) SaveResumePoint(text, sent); return Reject(token.IsCancellationRequested ? "Transfer cancelled." : ex.Message); } catch (Exception ex) { if (large) SaveResumePoint(text, sent); Fail(ex.Message, false); return false; } finally { lock (gate) { if (cancellation != null) { cancellation.Dispose(); cancellation = null; } transferTarget = IntPtr.Zero; } }
         }
         // Returns the offset to start typing from, or -1 when the user declines. Large texts ask first, offering Resume when the same text
         // was interrupted earlier; the platform returns focus to the target before typing begins.
@@ -85,12 +95,23 @@ namespace Paster.Core
             if (choice == TransferChoice.Resume && resumeAt > 0) return resumeAt;
             lock (gate) { resumeText = null; resumeOffset = 0; } return 0;
         }
+        // A focus change without recent user input means another program took the focus (a notification, a dialog, an app activating itself).
+        // The user did not cause it, so the message says who did and how far typing got.
+        private string FocusLostMessage(IntPtr focused, IntPtr target, int typed, int total, bool large)
+        {
+            string name = platform.DescribeWindow(focused), own = platform.DescribeWindow(target);
+            string who = name == null ? "another window" : name == own ? "another " + name + " window" : name;
+            return String.Format("Typing stopped because {0} took the focus ({1:N0} of {2:N0} characters typed).{3}", who, typed, total, large ? " Paste again in the original window to resume." : "");
+        }
         private static int CountLines(string text) { int lines = 1; for (int i = 0; i < text.Length; i++) if (text[i] == '\n') lines++; return lines; }
         private void SaveResumePoint(string text, int sent) { lock (gate) { if (sent > 0 && sent < text.Length) { resumeText = text; resumeOffset = sent; } } }
         public void Cancel() { lock (gate) { if (cancellation != null) cancellation.Cancel(); } }
-        public void ReportError(string error) { lock (gate) { lastError = error; } }
+        public void ReportError(string error) { lock (gate) { lastError = error; } OnFailed(error); }
         private bool Fail(string error) { return Fail(error, true); }
-        private bool Fail(string error, bool clearCapture) { lock (gate) { if (clearCapture) captured = null; lastError = error; } return false; }
+        private bool Fail(string error, bool clearCapture) { lock (gate) { if (clearCapture) captured = null; lastError = error; } OnFailed(error); return false; }
+        // Records an outcome the user caused or expects (cancellation, a repeated shortcut press) without raising Failed.
+        private bool Reject(string error) { lock (gate) { lastError = error; } return false; }
+        private void OnFailed(string error) { Action<string> handler = Failed; if (handler != null) handler(error); }
     }
     public sealed class SystemClock : IClock { public void Sleep(int milliseconds, CancellationToken token) { if (milliseconds > 0) token.WaitHandle.WaitOne(milliseconds); token.ThrowIfCancellationRequested(); } }
 }

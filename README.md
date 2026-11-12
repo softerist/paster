@@ -15,6 +15,15 @@ unavailable in the direction you need.
 `Ctrl+Shift+V` types the clipboard text into any application, and
 `Ctrl+Shift+X` cancels a running transfer.
 
+Paster runs without any visible window. When something goes wrong that you did
+not cause (a shortcut that could not be registered, an unusable settings file,
+another program taking the focus while Paster types), it shows a Windows
+notification; its icon appears in the notification area only while the
+notification is on screen. Clicking the notification opens the status. "Show
+tray icon" in the settings dialog (`--settings`) keeps the icon visible, with a
+menu for the status, settings, and exit commands; "Show notifications when
+something goes wrong" turns notifications off.
+
 ## Shortcuts
 
 | Shortcut | Action |
@@ -62,8 +71,10 @@ Pressing the normal Windows `Ctrl+V` while a listed remote application is the
 foreground window types the clipboard text instead of pasting it, as long as
 that text was copied locally.
 
-The default list covers the Remote Desktop clients `mstsc.exe` and `msrdc.exe`
-and the browser-based Windows Cloud client in Edge or Chrome. Entries are
+The default list covers the Remote Desktop clients `mstsc.exe`, `msrdc.exe`,
+and Remote Desktop Connection Manager (`RDCMan.exe`), and the browser-based
+Windows Cloud client in Edge or Chrome. A settings file written before an app
+was added to the defaults keeps its own list; add the app there. Entries are
 comma-separated process names (`.exe` is optional); add `:text` to require the
 window title to contain that text (for example `msedge.exe:Windows Cloud`), so
 other browser tabs keep their normal paste. Edit the list in the settings
@@ -83,9 +94,12 @@ inside the session itself is typed rather than pasted.
   `Ctrl+Insert`, or `Shift+Delete`) and the copy has not reached the local
   clipboard, which is the case when clipboard redirection is blocked, or
 - the clipboard last changed while the remote session was in front and "Type
-  text copied inside remote windows" is turned off.
+  text copied inside remote windows" is turned off, or
+- the application runs as administrator (Windows does not let Paster type
+  into it; see [Transfer safety and interruption](#transfer-safety-and-interruption)).
 
-Use `Ctrl+Shift+V` to type regardless.
+Use `Ctrl+Shift+V` to type regardless (except into programs running as
+administrator).
 
 Listed applications are also typed at the remote speed (1,000 keystrokes per
 second by default; a browser-based Windows Cloud session measured about 630
@@ -163,10 +177,32 @@ Paster stops the transfer when any of the following occurs:
 
 - The cancel shortcut (`Ctrl+Shift+X` by default) is pressed.
 - A physical keyboard key or mouse button is pressed. Paster's own simulated
-  keystrokes are never mistaken for user input.
+  keystrokes are never mistaken for user input, and while a paste runs every
+  physical click is counted, so even a quick touchpad tap stops it.
 - The local foreground window changes.
 - Windows rejects simulated input.
 - The application exits.
+
+What you do yourself stays quiet: a key press, a click, the cancel shortcut,
+declining a prompt, or switching to another window (any key press or click
+within the second before the focus changed counts as yours, even with "Stop
+typing on key press or click" off). When the focus moves without any input from
+you, another program took it (a chat notification, a dialog, an app activating
+itself); Paster then names that program and says how much was typed, for
+example "Typing stopped because Microsoft Teams took the focus (1,200 of 5,000
+characters typed)". Large transfers can be resumed by pasting again in the
+original window. Every stop, quiet or not, appears in `--status` as the last
+error.
+
+Windows silently discards simulated input sent to a program running as
+administrator (while Paster itself is not), so Paster checks the destination
+first:
+
+- `Ctrl+V` in a listed remote application running as administrator stays a
+  normal paste, which Windows allows.
+- `Ctrl+Shift+V` into any program running as administrator types nothing and
+  reports it, suggesting `Ctrl+V` instead. Run Paster as administrator to type
+  into elevated programs.
 
 An interrupted or failed transfer keeps the valid captured text in memory. A
 failed capture clears the previous capture to prevent stale text from being
@@ -206,12 +242,20 @@ discarded when the process exits. Operational status never displays captured
 text.
 
 Paster runs without elevation and uses Windows global hotkeys, a low-level
-keyboard hook, a clipboard-change listener, the `SendInput` API, a per-user
-named mutex, and a local management pipe. The keyboard hook only checks for
+keyboard hook, a clipboard-change listener, the `SendInput` API, a per-session
+named mutex, and a per-session local management pipe. The keyboard hook only checks for
 Paster's shortcuts, copy keys pressed in a remote window, and user
-interruptions; it does not record keystrokes. To recognize remote applications,
+interruptions; it does not record keystrokes. Windows silently removes a
+low-level hook that once responds too slowly (for example under heavy load or
+while resuming from sleep), so Paster re-installs it every minute and after
+resume, unlock, and session reconnect. While a paste runs, and only then, a
+low-level mouse hook counts physical clicks; it records no positions. To
+recognize remote applications,
 Paster reads the foreground window's process name and title, but only when a
-paste or copy shortcut is pressed, a transfer starts, or the clipboard changes. It cannot confirm
+paste or copy shortcut is pressed, a transfer starts, or the clipboard changes.
+Notifications name programs by their description (such as "Microsoft Teams"),
+never by window title, so document names and message subjects stay out of
+them. It cannot confirm
 that a destination, especially a remote application, accepted every simulated
 key.
 
@@ -236,8 +280,10 @@ dependency-free core test harness.
 
 Setup installs and immediately starts a stable per-user copy in
 `%LOCALAPPDATA%\Paster`, then registers it in the current user's Run key for
-future sign-ins. Paster has no tray icon, taskbar entry, or normal application
-window; it appears as a background process in Task Manager.
+future sign-ins. Paster has no taskbar entry or normal application window; by
+default it appears only as a background process in Task Manager, and its
+notification-area icon shows only while a notification is on screen. "Show
+tray icon" keeps the icon visible.
 
 Every setup run builds the current source, gracefully stops any running Paster
 instance (forcing termination only if it does not exit), replaces the installed
@@ -270,7 +316,7 @@ when you save there.
 | `confirmAboveLines` | Confirm pastes over (lines) | `2000` | 0 (never confirm or resume)-100,000,000 |
 | `promptTimeoutSeconds` | Prompt timeout (s) | `120` | 10-3,600 |
 | `typeOnCtrlV` | Type on Ctrl+V in listed apps | `true` | `false`: `Ctrl+V` is never intercepted |
-| `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
+| `typeOnPasteApps` | Type on Ctrl+V in apps | `mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud` | Comma-separated `process[:title text]` |
 | `typeRemoteCopies` | Type text copied inside remote windows | `true` | `false`: such copies paste natively |
 | `codeModeForRemotePaste` | Use code mode for Ctrl+V into remote windows | `true` | `false`: plain typing |
 | `codeModeDismissSuggestions` | Code mode: Space+Backspace before Enter and Tab | `true` | Closes suggestion popups without removing text |
@@ -278,16 +324,20 @@ when you save there.
 | `codeModeHomeAfterEnter` | Code mode: Home after Enter | `true` | |
 | `codeModeDeleteAutoClosed` | Code mode: Delete auto-closed brackets and quotes | `false` | Only safe when typing at the end of a document into an editor that auto-closes |
 | `remoteCharactersPerSecond` | Remote speed (keys/s) | `1000` | Keystrokes per second; 0 (unlimited)-100,000 |
+| `showTrayIcon` | Show tray icon | `false` | `true`: the notification-area icon (with its menu) stays visible; when off, it appears only while a notification is shown |
+| `showNotifications` | Show notifications when something goes wrong | `true` | `false`: no notifications; failures appear only in `--status` |
 
 Shortcut combinations must be distinct and contain at least one modifier plus
 one supported key: `A-Z`, `0-9`, `F1-F24`, or `Escape`. Supported modifiers are
 `Ctrl`, `Alt`, `Shift`, and `Win`. If a local destination drops characters,
 lower the batch size or raise the delay per batch.
 
-Open the settings dialog with `--settings`; it validates all values before
-saving, and changes apply to the running process except shortcuts, which need
-a restart to be re-registered. Edits made directly to `settings.json` take
-effect after Paster restarts or when you save the settings dialog. The remote
+Open the settings dialog with `--settings` or from the tray icon. It validates
+all values before saving; an invalid value keeps the dialog open and names the
+field. Saved changes, shortcuts included, apply to the running process at once.
+Edits made directly to `settings.json` take effect after Paster restarts or
+when you save the settings dialog. If the file cannot be used at startup,
+Paster runs with the defaults and reports why. The remote
 speed counts keystrokes, so code mode's extra keys are paced too. With
 `typeShiftedAsUnicode` off, letters typed with Shift come out in the wrong case
 while Caps Lock is on.
@@ -317,8 +367,9 @@ removes the in-memory capture and resume point.
 .\uninstall.ps1
 ```
 
-Uninstall disables the per-user Run entry, asks a running instance to exit,
-and removes the installed executable and configuration from the exact install
+Uninstall disables the per-user Run entry, asks a running instance to exit
+(and stops the installed copy if it has not exited after five seconds, since it
+keeps its executable locked), and removes the installed executable and configuration from the exact install
 directory. It does not remove unrelated user files.
 
 ## Current limitations
@@ -327,7 +378,7 @@ directory. It does not remove unrelated user files.
 - Unicode `SendInput` handling depends on the destination application; a few
   older console programs and games ignore Unicode input.
 - Lowercase letters, digits, and unshifted punctuation are sent as keys of the
-  local keyboard layout. If a remote session uses a different layout (for
+  destination window's keyboard layout. If a remote session uses a different layout (for
   example US locally and German remotely), turn on "Type all characters as
   Unicode" so every character arrives exactly.
 - If Windows rejects simulated input (a UAC prompt or the lock screen during a
@@ -349,5 +400,7 @@ batching and line-ending normalization, surrogate pairs, size limits, settings
 validation and migration, stale-capture clearing, newest-text selection,
 interruption and cancellation, foreground changes, shortcut validation,
 remote-application matching, remote pacing, resume points, confirmation
-prompts, capture preservation, and overlapping-operation prevention. Windows integration (hotkeys, the keyboard
+prompts, capture preservation, overlapping-operation prevention, blocked
+(elevated) destinations, which failures are reported, and telling your own
+window switches from another program taking the focus. Windows integration (hotkeys, the keyboard
 hook, and input injection) still depends on the live desktop environment.
