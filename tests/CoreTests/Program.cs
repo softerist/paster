@@ -149,6 +149,28 @@ namespace Paster.CoreTests
                 foreach (string earlier in new string[] { "mstsc.exe, msrdc.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud", "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud", "mstsc.exe, msrdc.exe, RDCMan.exe, msedge.exe:Windows App, chrome.exe:Windows App, msedge.exe:Windows Cloud, chrome.exe:Windows Cloud" }) {
                     File.WriteAllText(path,"{\"typeOnPasteApps\":\""+earlier+"\"}",new UTF8Encoding(false)); PasterConfig c=PasterConfig.LoadOrCreate(path); Assert(c.TypeOnPasteApps==PasterConfig.DefaultRemoteApps && c.IsTypeOnPasteApp("mRemoteNG.exe","x"),"earlier default not upgraded: "+earlier); Assert(File.ReadAllText(path).Contains("mRemoteNG.exe"),"upgrade not saved"); }
                 File.WriteAllText(path,"{\"typeOnPasteApps\":\"mstsc.exe, myclient.exe\"}",new UTF8Encoding(false)); Assert(PasterConfig.LoadOrCreate(path).TypeOnPasteApps=="mstsc.exe, myclient.exe","edited list replaced"); } finally { File.Delete(path); } });
+            Test("Ctrl+V follows the newest copy: text that reached this PC is handed over, a copy key inside a remote window keeps the session's own paste", delegate { DateTime t=new DateTime(2026,11,13,9,0,0,DateTimeKind.Utc); NewestCopy copy=new NewestCopy(true,t);
+                Assert(copy.HandsOver(true) && copy.Origin==CopyOrigin.ThisPC,"text on the clipboard at startup"); Assert(!new NewestCopy(false,t).HandsOver(true),"no text at startup");
+                copy.CopiedInsideRemote(t); Assert(!copy.HandsOver(true) && !copy.HandsOver(false),"Ctrl+C inside a remote window");
+                copy.ClipboardChanged(false,false,t); Assert(!copy.HandsOver(true) && copy.Origin==CopyOrigin.NoText,"files copied inside the session that reached this PC");
+                copy.ClipboardChanged(true,false,t); Assert(copy.HandsOver(true) && copy.HandsOver(false),"text copied on this PC");
+                copy.ClipboardChanged(true,true,t); Assert(copy.HandsOver(true) && !copy.HandsOver(false) && copy.Origin==CopyOrigin.RemoteWindow,"text copied inside a remote window follows Type text copied inside remote windows"); });
+            Test("a context menu opened inside a session keeps Ctrl+V a normal paste there until something new reaches this PC", delegate { DateTime t=new DateTime(2026,11,13,9,0,0,DateTimeKind.Utc); NewestCopy copy=new NewestCopy(true,t); IntPtr session=new IntPtr(10);
+                // Files copied with the context menu inside a session whose clipboard is blocked never reach this PC: only the menu shows the copy.
+                Assert(copy.ContextMenuWindow==IntPtr.Zero,"no menu yet");
+                copy.OpenedContextMenu(session,t); Assert(copy.ContextMenuWindow==session && copy.HandsOver(true),"only the session where the menu was opened keeps its own paste");
+                copy.ClipboardChanged(true,false,t); Assert(copy.ContextMenuWindow==IntPtr.Zero && copy.HandsOver(true),"text copied on this PC afterwards is handed over again");
+                copy.OpenedContextMenu(session,t); copy.ClipboardChanged(true,true,t); Assert(copy.ContextMenuWindow==IntPtr.Zero && copy.HandsOver(true),"text copied with the menu that reached this PC is handled like any copy from the session");
+                copy.OpenedContextMenu(session,t); copy.ClipboardChanged(false,false,t); Assert(copy.ContextMenuWindow==IntPtr.Zero && !copy.HandsOver(true),"files copied with the menu that reached this PC paste normally everywhere");
+                copy.OpenedContextMenu(IntPtr.Zero,t); Assert(copy.ContextMenuWindow==IntPtr.Zero,"a menu without a window"); });
+            Test("the status says what Ctrl+V does in remote windows and why", delegate { DateTime t=new DateTime(2026,11,13,9,0,0,DateTimeKind.Utc); string time=t.ToLocalTime().ToString("T"), prefix="Ctrl+V in remote windows: "; NewestCopy copy=new NewestCopy(true,t);
+                Assert(copy.Describe(true,true)==prefix+"handled by Paster (text on the clipboard when Paster started)","startup: "+copy.Describe(true,true));
+                copy.ClipboardChanged(true,false,t); Assert(copy.Describe(true,true)==prefix+"handled by Paster (text copied at "+time+")","copy on this PC: "+copy.Describe(true,true));
+                copy.OpenedContextMenu(new IntPtr(10),t); Assert(copy.Describe(true,true)==prefix+"handled by Paster (text copied at "+time+"), except a normal paste in the session where you opened a context menu at "+time,"context menu: "+copy.Describe(true,true));
+                copy.CopiedInsideRemote(t); Assert(copy.Describe(true,true)==prefix+"normal paste (copied inside a remote window at "+time+")","copy inside a remote window: "+copy.Describe(true,true));
+                copy.ClipboardChanged(true,true,t); Assert(copy.Describe(true,true)==prefix+"handled by Paster (text copied inside a remote window at "+time+")" && copy.Describe(true,false)==prefix+"normal paste (text copied inside a remote window at "+time+", which is not typed)","text from a remote window: "+copy.Describe(true,false));
+                copy.ClipboardChanged(false,false,t); Assert(copy.Describe(true,true)==prefix+"normal paste (the copy at "+time+" holds no text)","no text: "+copy.Describe(true,true));
+                Assert(copy.Describe(false,true)==prefix+"normal paste (turned off in the settings)","turned off"); Assert(new NewestCopy(false,t).Describe(true,true)==prefix+"normal paste (the clipboard holds no text)","no text at startup"); });
             Console.WriteLine("{0} tests passed", passed); return 0;
         }
     }

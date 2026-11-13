@@ -90,6 +90,14 @@ updated automatically. You can add other programs in the settings, see
   let Paster check again, close that session window or run
   `& "$env:LOCALAPPDATA\Paster\paster.exe" --clear`. If typed lines come out in
   the wrong order there, raise "Pause after Enter and Tab" in the settings.
+- **Copying inside a remote session:** after you copy something inside a
+  session (`Ctrl+C`, `Ctrl+X`) or open a right-click menu there, `Ctrl+V`
+  there is a normal paste until you copy something on your computer, so files
+  and folders copied in a session paste as usual. Press `Ctrl+Shift+V` to type
+  your computer's text there anyway. If you copy something on your computer
+  in between, `Ctrl+V` types that, so copy the files again first. Copying with
+  a toolbar button inside the session isn't noticed; use `Ctrl+C` or the
+  right-click menu.
 - **Passwords:** Paster never makes its own copy of text from a password
   manager. Where a normal paste already worked, `Ctrl+V` pastes it normally;
   anywhere else, Paster types it.
@@ -112,6 +120,8 @@ To check on Paster at any time, run:
 ```powershell
 & "$env:LOCALAPPDATA\Paster\paster.exe" --status
 ```
+
+It also shows what `Ctrl+V` does in remote windows right now, and why.
 
 ## Settings
 

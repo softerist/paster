@@ -138,4 +138,48 @@ namespace Paster.Core
         public int Count(PasteCheck check) { lock (gate) { int count = 0; foreach (PasteCheck known in checks.Values) if (known == check) count++; return count; } }
         public void Clear() { lock (gate) { checks.Clear(); } }
     }
+
+    // Where the newest copy was made decides what Ctrl+V does in a remote window. Text that reached this PC's clipboard is handed to Paster,
+    // which pastes it normally or types it; after a copy made inside a remote window, the session pastes its own clipboard. Paster sees every
+    // copy that reaches this PC, but a session whose clipboard sharing is blocked keeps its copies to itself, so only the gesture inside the
+    // remote window shows them. A copy or cut key there keeps every remote window's own paste until something new reaches this PC's
+    // clipboard. A context menu opened inside a session (right-click, the menu key, or Shift+F10), where files and folders are usually
+    // copied, keeps that session's own paste: without it, Ctrl+V after copying files that way inside a blocked session typed older text into
+    // Explorer, where every key is a command (letters select files, Enter opens them, Backspace goes up a folder).
+    public enum CopyOrigin { NoText, ThisPC, RemoteWindow, InsideRemote }
+    public sealed class NewestCopy
+    {
+        private readonly object gate = new object(); private CopyOrigin origin; private DateTime at, menuAt; private bool startup = true; private int generation, menuGeneration = -1; private IntPtr menuWindow;
+        // Times are UTC; the status shows them in local time. Paster cannot know where text already on the clipboard at startup came from.
+        public NewestCopy(bool clipboardHasText, DateTime now) { origin = clipboardHasText ? CopyOrigin.ThisPC : CopyOrigin.NoText; at = now; }
+        // Something new reached this PC's clipboard; while a remote window is in front, it was copied inside it. Paster's own republished copy
+        // (paste normally first) is not a new copy and must not be reported.
+        public void ClipboardChanged(bool hasText, bool remoteWindowInFront, DateTime now) { lock (gate) { generation++; origin = !hasText ? CopyOrigin.NoText : remoteWindowInFront ? CopyOrigin.RemoteWindow : CopyOrigin.ThisPC; at = now; startup = false; } }
+        public void CopiedInsideRemote(DateTime now) { lock (gate) { origin = CopyOrigin.InsideRemote; at = now; startup = false; } }
+        // window: the window inside the remote desktop program where the menu was opened (its session).
+        public void OpenedContextMenu(IntPtr window, DateTime now) { lock (gate) { menuWindow = window; menuGeneration = generation; menuAt = now; } }
+        public CopyOrigin Origin { get { lock (gate) { return origin; } } }
+        // Whether Ctrl+V in a remote window is handed to Paster, unless it is pressed in the session of ContextMenuWindow.
+        public bool HandsOver(bool typeRemoteCopies) { lock (gate) { return HandsOverLocked(typeRemoteCopies); } }
+        // The window where a context menu was opened since something last reached this PC's clipboard, or zero.
+        public IntPtr ContextMenuWindow { get { lock (gate) { return MenuCounts ? menuWindow : IntPtr.Zero; } } }
+        private bool HandsOverLocked(bool typeRemoteCopies) { return origin == CopyOrigin.ThisPC || origin == CopyOrigin.RemoteWindow && typeRemoteCopies; }
+        private bool MenuCounts { get { return menuWindow != IntPtr.Zero && menuGeneration == generation; } }
+        // One status line: what Ctrl+V does in remote windows and why, so an unexpected paste can be traced to the copy that caused it.
+        public string Describe(bool typeOnCtrlV, bool typeRemoteCopies)
+        {
+            lock (gate)
+            {
+                string when = Time(at), text;
+                if (!typeOnCtrlV) text = "normal paste (turned off in the settings)";
+                else if (origin == CopyOrigin.ThisPC) text = "handled by Paster (" + (startup ? "text on the clipboard when Paster started" : "text copied at " + when) + ")";
+                else if (origin == CopyOrigin.RemoteWindow) text = typeRemoteCopies ? "handled by Paster (text copied inside a remote window at " + when + ")" : "normal paste (text copied inside a remote window at " + when + ", which is not typed)";
+                else if (origin == CopyOrigin.InsideRemote) text = "normal paste (copied inside a remote window at " + when + ")";
+                else text = "normal paste (" + (startup ? "the clipboard holds no text" : "the copy at " + when + " holds no text") + ")";
+                if (typeOnCtrlV && HandsOverLocked(typeRemoteCopies) && MenuCounts) text += ", except a normal paste in the session where you opened a context menu at " + Time(menuAt);
+                return "Ctrl+V in remote windows: " + text;
+            }
+        }
+        private static string Time(DateTime utc) { return utc.ToLocalTime().ToString("T"); }
+    }
 }

@@ -126,21 +126,36 @@ where the session accepts it; in browser-based clients it is typed.
 - you copied or cut inside the remote session (`Ctrl+C`, `Ctrl+X`,
   `Ctrl+Insert`, or `Shift+Delete`) and the copy has not reached the local
   clipboard, which is the case when clipboard redirection is blocked, or
+- you opened a context menu inside that session (right-click, the menu key,
+  or `Shift+F10`), where files and folders are usually copied, and nothing
+  new has reached the local clipboard since. A copy made there in a session
+  that blocks clipboard sharing never reaches this PC, so without this,
+  `Ctrl+V` would type older text into the program, and in File Explorer every
+  typed key is a command (letters select files, `Enter` opens them,
+  `Backspace` goes up a folder). It applies to that session only; a
+  right-click on the program's own panels (such as the server list in RDCMan)
+  changes nothing, or
 - the clipboard last changed while the remote session was in front and "Type
   text copied inside remote windows" is turned off, or
 - the application runs as administrator (Windows does not let Paster type
   into it; see [Transfer safety and interruption](#transfer-safety-and-interruption)).
 
 Use `Ctrl+Shift+V` to type regardless (except into programs running as
-administrator).
+administrator). `--status` shows what `Ctrl+V` does in remote windows at the
+moment and why: the newest copy and when it was made.
 
 Limitations of `Ctrl+V` handling:
 
 - In browser-based clients, and with [Paste normally first](#paste-normally-first)
   turned off, Paster does not try a native paste first: the choice is made by
   destination application and clipboard origin.
-- A copy made inside the remote session with the mouse (context menu) is not
-  detected; use `Ctrl+C` there or copy locally.
+- A copy made inside the remote session with a toolbar or ribbon button (such
+  as Copy in File Explorer's command bar) is not detected; use `Ctrl+C` or the
+  context menu there.
+- The newest copy wins. Text copied on this PC after a copy inside a session
+  that blocks clipboard sharing is what `Ctrl+V` types there, even in File
+  Explorer, where typed keys act as commands: copy the files again inside the
+  session before pasting them.
 - Copying from the remote session to the local machine is not possible when
   clipboard redirection is blocked, because the copied text stays on the remote
   clipboard.
@@ -384,9 +399,10 @@ something goes wrong" turns notifications off.
 
 `--status` reports whether a capture exists, whether transfer is active,
 whether Windows accepted the last simulated input, the current target-window
-handle, the resume point of an interrupted transfer, and the latest error; with
-paste normally first on, also in how many sessions the normal paste works or is
-blocked.
+handle, the resume point of an interrupted transfer, the latest error, and what
+`Ctrl+V` does in remote windows and why (the newest copy and when it was made);
+with paste normally first on, also in how many sessions the normal paste works
+or is blocked.
 
 ## Safety and privacy
 
@@ -400,19 +416,23 @@ displays captured text.
 Paster runs without elevation and uses Windows global hotkeys, a low-level
 keyboard hook, a clipboard-change listener, the `SendInput` API, a per-session
 named mutex, and a per-session local management pipe. The keyboard hook only
-checks for Paster's shortcuts, copy keys pressed in a remote window, and user
-interruptions; it does not record keystrokes. Windows silently removes a
-low-level hook that once responds too slowly (for example under heavy load or
-while resuming from sleep), so Paster re-installs it every minute and after
-resume, unlock, and session reconnect. While a paste runs, and only then, a
-low-level mouse hook counts physical clicks; it records no positions.
+checks for Paster's shortcuts, copy and context-menu keys pressed in a remote
+window, and user interruptions; it does not record keystrokes. Windows
+silently removes a low-level hook that once responds too slowly (for example
+under heavy load or while resuming from sleep), so Paster re-installs it every
+minute and after resume, unlock, and session reconnect. While a paste runs,
+and only then, a low-level mouse hook counts physical clicks; it records no
+positions. To notice a right-click inside a remote window, Paster also
+receives mouse input as raw input, which never delays the mouse; it looks only
+at the right button and records nothing.
 
 To recognize remote applications, Paster reads the foreground window's process
-name and title, but only when a paste or copy shortcut is pressed, a transfer
-starts, or the clipboard changes. Notifications name programs by their
-description (such as "Microsoft Teams"), never by window title, so document
-names and message subjects stay out of them. Paster cannot confirm that a
-destination, especially a remote application, accepted every simulated key.
+name and title, but only when a paste, copy, or context-menu key is pressed,
+you right-click, a transfer starts, or the clipboard changes. Notifications
+name programs by their description (such as "Microsoft Teams"), never by
+window title, so document names and message subjects stay out of them. Paster
+cannot confirm that a destination, especially a remote application, accepted
+every simulated key.
 
 ## Configuration
 
@@ -525,9 +545,10 @@ interruption and cancellation, foreground changes, shortcut validation,
 remote-application matching, remote pacing, resume points, confirmation
 prompts, capture preservation, overlapping-operation prevention, blocked
 (elevated) destinations, which failures are reported, telling your own window
-switches from another program taking the focus, and the paste normally first
-decisions. Windows integration (hotkeys, the keyboard hook, input injection,
-and the clipboard) still depends on the live desktop environment.
+switches from another program taking the focus, the paste normally first
+decisions, and which copy decides what `Ctrl+V` does in remote windows.
+Windows integration (hotkeys, the keyboard hook, input injection, and the
+clipboard) still depends on the live desktop environment.
 
 ## Limitations
 

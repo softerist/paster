@@ -33,6 +33,11 @@ management pipe (`--status`, `--settings`, `--clear`, `--exit`), notifications, 
     per-session results (move focus with AttachThreadInput + SetFocus and confirm it with GetGUIThreadInfo).
   - Its Copy button (BM_CLICK; enabled only after the box changed through a paste) makes Character Map the clipboard owner: a copy
     made inside the remote program.
+- Ctrl+V decision (`NewestCopy`): the hook decides whether Ctrl+V is handed over, and posting `WM_HOTKEY` skips that decision,
+  so check it through the `--status` line "Ctrl+V in remote windows: ...". Context-menu detection reads raw input, which counts
+  injected clicks too: bring the stand-in to the front (AttachThreadInput + SetForegroundWindow, then check), move the cursor
+  over it, SendInput a right-click, and put the cursor back; the line then ends with "except a normal paste in the session where
+  you opened a context menu at ...". Putting the same clipboard content back counts as a new copy and clears it.
 - Clipboard content: from Windows PowerShell 5.1, a WinForms `DataObject` put with `Clipboard.SetDataObject($d, $true)`:
   UnicodeText plus Html (a VS Code or browser copy), `SetText` plus `SetImage` (an Office copy), or UnicodeText plus a
   `MemoryStream` under "ExcludeClipboardContentFromMonitorProcessing" (a password manager). The clipboard owner's pid shows whether
